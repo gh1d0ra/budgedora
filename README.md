@@ -26,7 +26,7 @@ Monarch / Copilot (clean reports, month-to-date pace) — minus the bank syncing
 `groceries last year` · `restaurants vs groceries 2025` · `car/gas 2025 vs 2024` · `top expenses in march` ·
 `average monthly utilities` · `how many times restaurants last 3 months` · `netflix` · `costco since 2024` · `over 200 this year` · `q2 2025`
 
-**Accounts** — each login has its own buckets and data (scrypt-hashed passwords, HttpOnly session cookies).
+**Accounts** — each login has its own buckets and data (PBKDF2-hashed passwords, HttpOnly session cookies).
 Default buckets: Groceries, Restaurants, Household + grass, Car/Gas, House insurance/tax + HOA, Utilities,
 Education, Giving, Health/Beauty, Clothes, Entertainment, Vacation. Rename, recolor, reorder, budget or archive any of them.
 
@@ -52,6 +52,13 @@ npm i -g wrangler && wrangler login      # once
 wrangler d1 create budgedora             # once — put the id in wrangler.toml
 npm run cf:db:init                       # once — creates the tables (safe to re-run)
 npm run deploy                           # every update
+```
+
+Add a demo account with ~3 years of made-up expenses to the live site (re-running resets it):
+
+```bash
+node scripts/demo-sql.js someone@example.com theirpassword "Name" demo.sql
+wrangler d1 execute budgedora --remote --file=demo.sql
 ```
 
 Back up the live data any time: `wrangler d1 export budgedora --remote --output backup.sql`.
