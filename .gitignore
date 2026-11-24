@@ -9,3 +9,4 @@ demo.sql
 # Playwright
 test-results/
 playwright-report/
+.dev.vars

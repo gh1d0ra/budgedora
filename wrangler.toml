@@ -18,9 +18,9 @@ database_id = "58f98c55-af37-406b-a804-8da0828e5cf4"
 binding = "BACKUPS"
 id = "09bd7bf31d8b47d0933db256b1091d24"
 
-[vars]
-# Family admins (comma-separated): can create reset links, unlock and restore accounts.
-ADMIN_EMAILS = "igorrash@gmail.com"
+# Family admins (comma-separated emails) are a secret, so they're not in the repo:
+#   npx wrangler secret put ADMIN_EMAILS
+# For `wrangler dev`, put ADMIN_EMAILS=... in .dev.vars (git-ignored). For `npm start`, set the ADMIN_EMAILS env variable.
 
 # Daily: session cleanup + backup snapshot (04:17 UTC)
 [triggers]

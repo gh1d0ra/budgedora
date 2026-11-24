@@ -75,7 +75,8 @@ reviewed before saving), CSV export/import (`date,bucket,amount,note`).
 - Sessions: random 256-bit tokens in HttpOnly, SameSite=Lax, Secure cookies; 60 days; password change/reset signs out other devices.
 - CSRF: state-changing requests must be JSON. XSS: all user text is escaped; strict Content-Security-Policy (no inline scripts, no eval),
   plus X-Frame-Options, nosniff, HSTS, no-referrer, Permissions-Policy.
-- Password reset: the family admin (`ADMIN_EMAILS` in wrangler.toml) creates a one-time link (24 h, only its hash is stored).
+- Password reset: the family admin creates a one-time link (24 h, only its hash is stored). Admins are listed in the
+  `ADMIN_EMAILS` Cloudflare secret (`npx wrangler secret put ADMIN_EMAILS`), so no email address is kept in the repo.
 - Account deletion: 3-step confirmation; soft delete — the account is hidden and signed out, all data kept; the admin can restore it.
 - The admin panel shows account names, status and counts — never anyone's expenses.
 
@@ -144,6 +145,7 @@ npm i -g wrangler && wrangler login      # once
 wrangler d1 create budgedora             # once — put the id in wrangler.toml
 npm run cf:db:init                       # once — creates the tables (safe to re-run)
 wrangler kv namespace create budgedora-backups   # once — put the id in wrangler.toml
+wrangler secret put ADMIN_EMAILS            # once — family admin email(s), comma-separated
 npm run deploy                           # every update
 ```
 
