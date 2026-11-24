@@ -49,6 +49,7 @@
       <nav class="tabs" id="tabs">
         <button data-tab="add" class="active"><span>＋</span>Add</button>
         <button data-tab="history"><span>☰</span>History</button>
+        <button data-tab="budget"><span>◎</span>Budget</button>
         <button data-tab="reports"><span>◔</span>Reports</button>
         <button data-tab="settings"><span>⚙</span>Buckets</button>
       </nav>
@@ -139,6 +140,37 @@
         <div class="grid-2">
           <div class="card"><h3>Biggest expenses</h3><ul class="tx-list" id="topList"></ul></div>
           <div class="card"><h3>By day of week</h3><div class="chart-box"><canvas id="chDow"></canvas></div></div>
+        </div>
+      </section>
+
+      <!-- BUDGET: expected vs actual -->
+      <section class="view" id="view-budget" hidden>
+        <div class="card budget-head">
+          <div class="month-nav">
+            <button class="icon-btn big-arrow" id="budPrev" type="button" aria-label="Previous month">‹</button>
+            <h2 id="budMonthTitle"></h2>
+            <button class="icon-btn big-arrow" id="budNext" type="button" aria-label="Next month">›</button>
+          </div>
+          <div class="row gap wrap budget-actions">
+            <button class="chip" id="budToday" type="button">This month</button>
+            <button class="chip" id="budCopy" type="button">Copy last month's plan</button>
+            <div class="seg small-seg" role="radiogroup" aria-label="Edits apply to">
+              <button type="button" class="seg-btn active" data-scope="month">Change this month only</button>
+              <button type="button" class="seg-btn" data-scope="default">Change every month</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="kpis" id="budKpis"></div>
+
+        <div class="card">
+          <div class="table-wrap"><table class="tbl budget-tbl" id="budTable"></table></div>
+          <p class="muted small" id="budNote"></p>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3 id="budYearTitle">Year</h3><span class="muted small">Click a month to open it</span></div>
+          <div class="table-wrap"><table class="tbl budget-year" id="budYear"></table></div>
         </div>
       </section>
 

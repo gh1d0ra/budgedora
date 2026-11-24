@@ -27,8 +27,12 @@ Monarch / Copilot (clean reports, month-to-date pace) — minus the bank syncing
 `average monthly utilities` · `how many times restaurants last 3 months` · `netflix` · `costco since 2024` · `over 200 this year` · `q2 2025`
 
 **Accounts** — each login has its own buckets and data (PBKDF2-hashed passwords, HttpOnly session cookies).
-Default buckets: Groceries, Restaurants, Household + grass, Car/Gas, House insurance/tax + HOA, Utilities,
+Default buckets: Groceries, Restaurants, Household, Car/Gas, House insurance/tax + HOA, Utilities,
 Education, Giving, Health/Beauty, Clothes, Entertainment, Vacation. Rename, recolor, reorder, budget or archive any of them.
+
+**Budget** — set an *expected* amount per bucket for every month (default) and override any single month
+(e.g. Vacation in July). See expected vs actual with **Remaining** and **Over budget** per bucket and in total,
+copy last month's plan, and a year table (Expected · Actual · Over budget · Remaining · Net) like a yearly budget sheet.
 
 **Refunds** — negative amounts (or the ↩ Refund toggle) subtract from a bucket.
 

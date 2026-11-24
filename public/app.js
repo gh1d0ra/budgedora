@@ -26,7 +26,15 @@
   };
   const bucketById = (id) => state.buckets.find((b) => b.id === id);
   const activeBuckets = () => state.buckets.filter((b) => !b.archived);
-  const ctx = () => ({ buckets: state.buckets, expenses: state.expenses, fmt, fmtDate, esc, bucketById, today: new Date() });
+  const ctx = () => ({ buckets: state.buckets, expenses: state.expenses, fmt, fmtDate, esc, bucketById, expectedFor, today: new Date() });
+  // Month plan: per-month override, else the bucket's default monthly budget, else null (not budgeted).
+  let budgetMap = new Map();
+  const indexBudgets = () => { budgetMap = new Map(state.budgets.map((x) => [`${x.bucketId}|${x.month}`, x.amount])); };
+  const monthKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  function expectedFor(b, key) {
+    const o = budgetMap.get(`${b.id}|${key}`);
+    return o !== undefined ? o : b.monthlyBudget ?? null;
+  }
   const store = {
     get(k) { try { return localStorage.getItem(`bd:${state.user?.id}:${k}`); } catch { return null; } },
     set(k, v) { try { localStorage.setItem(`bd:${state.user?.id}:${k}`, v); } catch { /* ignore */ } },
@@ -121,6 +129,8 @@
       state.user = data.user;
       state.buckets = data.buckets;
       state.expenses = data.expenses;
+      state.budgets = data.budgets || [];
+      indexBudgets();
     } catch (err) {
       if (err.status === 401) return showAuth();
       throw err;
@@ -138,7 +148,7 @@
 
   // ---------- tabs ----------
   function switchTab(tab, silent) {
-    if (!['add', 'history', 'reports', 'settings'].includes(tab)) tab = 'add';
+    if (!['add', 'history', 'budget', 'reports', 'settings'].includes(tab)) tab = 'add';
     state.tab = tab;
     $$('#tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
     $$('.view').forEach((v) => (v.hidden = v.id !== `view-${tab}`));
@@ -159,6 +169,7 @@
     if (state.tab === 'add') { renderBucketGrid(); renderMonthCard(); renderRecent(); }
     if (state.tab === 'history') renderHistory();
     if (state.tab === 'reports') renderReports();
+    if (state.tab === 'budget') renderBudget();
     if (state.tab === 'settings') renderSettings();
   }
 
@@ -172,15 +183,17 @@
 
   function renderBucketGrid() {
     const spend = monthSpend();
+    const curKey = monthKey();
     const grid = $('#bucketGrid');
     grid.innerHTML = activeBuckets().map((b) => {
       const s = spend.get(b.id) || 0;
-      const ratio = b.monthlyBudget ? Math.min(1, s / b.monthlyBudget) : 0;
-      const sub = b.monthlyBudget ? `${fmtShort(s)} / ${fmtShort(b.monthlyBudget)}` : s ? `${fmtShort(s)} this month` : '&nbsp;';
+      const exp = expectedFor(b, curKey);
+      const ratio = exp ? Math.min(1, Math.max(0, s / exp)) : 0;
+      const sub = exp ? `${fmtShort(s)} / ${fmtShort(exp)}` : s ? `${fmtShort(s)} this month` : '&nbsp;';
       return `<button type="button" role="radio" class="bucket-btn${state.selectedBucket === b.id ? ' selected' : ''}${state.selectedBucket === b.id && !state.userPickedBucket ? ' suggested' : ''}"
         style="--c:${esc(b.color)}" data-id="${b.id}" aria-checked="${state.selectedBucket === b.id}">
         <span class="bi">${esc(b.icon || '•')}</span><span class="bn">${esc(b.name)}</span><span class="bs">${sub}</span>
-        ${b.monthlyBudget ? `<span class="bar${s > b.monthlyBudget ? ' over' : ''}" style="width:${ratio * 100}%"></span>` : ''}
+        ${exp ? `<span class="bar${s > exp ? ' over' : ''}" style="width:${ratio * 100}%"></span>` : ''}
       </button>`;
     }).join('') || '<p class="muted">No buckets yet — add some in the Buckets tab.</p>';
   }
@@ -286,7 +299,7 @@
     const lmFrom = S.ymd(new Date(t.getFullYear(), t.getMonth() - 1, 1));
     const lmTo = S.ymd(new Date(t.getFullYear(), t.getMonth() - 1, Math.min(t.getDate(), new Date(t.getFullYear(), t.getMonth(), 0).getDate())));
     const lmSame = S.sum(state.expenses.filter((e) => e.date >= lmFrom && e.date <= lmTo));
-    const budget = activeBuckets().reduce((s, b) => s + (b.monthlyBudget || 0), 0);
+    const budget = state.buckets.reduce((s, b) => s + (expectedFor(b, monthKey(t)) || 0), 0);
     const byB = [...monthSpend().entries()].map(([id, v]) => ({ b: bucketById(id), v })).filter((x) => x.b && x.v > 0).sort((a, b) => b.v - a.v);
     const stackTotal = byB.reduce((s, x) => s + x.v, 0);
     let cmp = '';
@@ -500,11 +513,11 @@
     prevList.forEach((e) => prevB.set(e.bucketId, (prevB.get(e.bucketId) || 0) + e.amount));
     const tblRows = state.buckets.filter((b) => !b.archived || byB.get(b.id) || prevB.get(b.id))
       .map((b) => ({ b, v: byB.get(b.id) || 0, pv: prevB.get(b.id) || 0 })).sort((a, b) => b.v - a.v);
-    const budgetMonths = p.kind === 'month' ? 1 : months;
+    const planMonths = S.monthsIn(p).filter((m) => m.key <= today.slice(0, 7));
     $('#bucketTable').innerHTML = `<thead><tr><th>Bucket</th><th>Spent</th><th>%</th><th>Avg / mo</th>${prev ? `<th>${inProgress ? 'Prev. to date' : 'Previous'}</th><th>Change</th>` : ''}<th>Budget</th></tr></thead>
       <tbody>${tblRows.map(({ b, v, pv }) => {
         const ch = pv ? Math.round(((v - pv) / pv) * 100) : null;
-        const bud = b.monthlyBudget ? b.monthlyBudget * budgetMonths : 0;
+        const bud = planMonths.reduce((s, m) => s + (expectedFor(b, m.key) || 0), 0);
         return `<tr><td><i class="dot" style="background:${esc(b.color)}"></i>${esc(b.icon)} ${esc(b.name)}</td><td>${fmt(v)}</td><td>${total ? Math.round((v / total) * 100) : 0}%</td><td>${fmt(v / months)}</td>
           ${prev ? `<td class="muted">${fmt(pv)}</td><td>${ch == null ? (v ? '<span class="up">new</span>' : '—') : `<span class="${ch > 0 ? 'up' : ch < 0 ? 'down' : ''}">${ch > 0 ? '+' : ''}${ch}%</span>`}</td>` : ''}
           <td>${bud ? `${fmtShort(v)} / ${fmtShort(bud)}<span class="budget-bar"><i class="${v > bud ? 'over' : ''}" style="width:${Math.min(100, (v / bud) * 100)}%"></i></span>` : '<span class="muted">—</span>'}</td></tr>`;
@@ -609,6 +622,164 @@
   }
   $('#askForm').addEventListener('submit', (e) => { e.preventDefault(); const t = $('#askInput').value.trim(); if (t) ask(t); });
   $('#askExamples').addEventListener('click', (e) => { const c = e.target.closest('.chip'); if (c) ask(c.textContent); });
+
+  // ---------- BUDGET: expected vs actual ----------
+  state.budMonth = monthKey();
+  state.budScope = 'month';
+  const keyLabel = (key) => `${S.MONTHS[Number(key.slice(5)) - 1]} ${key.slice(0, 4)}`;
+  const shiftKey = (key, n) => monthKey(new Date(Number(key.slice(0, 4)), Number(key.slice(5)) - 1 + n, 1));
+
+  /** Expected / actual / remaining / over for every relevant bucket in one month. */
+  function monthPlan(key) {
+    const spent = new Map();
+    state.expenses.forEach((e) => { if (e.date.startsWith(key)) spent.set(e.bucketId, (spent.get(e.bucketId) || 0) + e.amount); });
+    const rows = state.buckets
+      .map((b) => {
+        const exp = expectedFor(b, key);
+        const actual = spent.get(b.id) || 0;
+        return {
+          b, exp, actual, custom: budgetMap.has(`${b.id}|${key}`),
+          remaining: exp == null ? null : Math.max(0, exp - actual),
+          over: exp == null ? null : Math.max(0, actual - exp),
+        };
+      })
+      .filter((r) => !r.b.archived || r.actual || r.exp);
+    const t = {
+      expected: rows.reduce((s, r) => s + (r.exp || 0), 0),
+      actual: rows.reduce((s, r) => s + r.actual, 0),
+      remaining: rows.reduce((s, r) => s + (r.remaining || 0), 0),
+      over: rows.reduce((s, r) => s + (r.over || 0), 0),
+      unbudgeted: rows.filter((r) => r.exp == null).reduce((s, r) => s + r.actual, 0),
+    };
+    return { rows, t };
+  }
+
+  function renderBudget() {
+    const key = state.budMonth;
+    const curKey = monthKey();
+    $('#budMonthTitle').textContent = keyLabel(key);
+    $('#budToday').hidden = key === curKey;
+    $$('[data-scope]').forEach((x) => x.classList.toggle('active', x.dataset.scope === state.budScope));
+    const { rows, t } = monthPlan(key);
+
+    const used = t.expected ? Math.round((t.actual / t.expected) * 100) : null;
+    let pace = '';
+    if (key === curKey) {
+      const now = new Date(), dim = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+      pace = `${Math.round((now.getDate() / dim) * 100)}% of the month gone`;
+    }
+    const net = t.expected - t.actual;
+    $('#budKpis').innerHTML = [
+      ['Expected', fmt(t.expected), `${rows.filter((r) => r.exp != null).length} budgeted buckets`],
+      ['Actual', fmt(t.actual), used == null ? 'no plan yet' : `${used}% of plan used${pace ? ' · ' + pace : ''}`],
+      ['Over budget', `<span class="${t.over ? 'up' : ''}">${fmt(t.over)}</span>`, `${rows.filter((r) => r.over > 0).length} bucket(s) over`],
+      ['Remaining', `<span class="${t.remaining ? 'down' : ''}">${fmt(t.remaining)}</span>`, `Net ${net >= 0 ? 'under' : 'over'} plan: <b class="${net >= 0 ? 'down' : 'up'}">${fmt(Math.abs(net))}</b>`],
+    ].map(([l, v, s]) => `<div class="kpi"><div class="kl">${l}</div><div class="kv">${v}</div><div class="kd">${s}</div></div>`).join('');
+
+    $('#budTable').innerHTML = `<thead><tr><th>Bucket</th><th>Expected</th><th>Actual</th><th>Remaining</th><th>Over budget</th><th class="bar-col"></th></tr></thead>
+      <tbody>${rows.map((r) => {
+        const pct = r.exp ? Math.min(100, (r.actual / r.exp) * 100) : 0;
+        const def = r.b.monthlyBudget;
+        return `<tr data-id="${r.b.id}">
+          <td><i class="dot" style="background:${esc(r.b.color)}"></i>${esc(r.b.icon)} ${esc(r.b.name)}</td>
+          <td class="exp-cell"><input class="exp-in" inputmode="decimal" value="${r.exp ?? ''}" placeholder="—" aria-label="Expected for ${esc(r.b.name)}">
+            ${r.custom ? `<button class="icon-btn reset-exp" type="button" title="Use the every-month amount (${def == null ? 'none' : fmt(def)})">↺</button>` : ''}</td>
+          <td data-label="Actual">${fmt(r.actual)}</td>
+          <td data-label="Remaining" class="${r.remaining ? 'down' : 'muted'}">${r.remaining == null ? '—' : fmt(r.remaining)}</td>
+          <td data-label="Over" class="${r.over ? 'up' : 'muted'}">${r.over == null ? '—' : fmt(r.over)}</td>
+          <td class="bar-col">${r.exp ? `<span class="budget-bar wide"><i class="${r.actual > r.exp ? 'over' : ''}" style="width:${pct}%"></i></span>` : ''}</td>
+        </tr>`;
+      }).join('')}</tbody>
+      <tfoot><tr><td>Total</td><td class="exp-cell">${fmt(t.expected)}</td><td data-label="Actual">${fmt(t.actual)}</td><td data-label="Remaining" class="down">${fmt(t.remaining)}</td><td data-label="Over" class="up">${fmt(t.over)}</td><td class="bar-col"></td></tr></tfoot>`;
+    $('#budNote').innerHTML = [
+      t.unbudgeted ? `${fmt(t.unbudgeted)} was spent in buckets without an expected amount (not counted in Remaining/Over).` : '',
+      `<b>Change this month only</b> sets ${keyLabel(key)} alone. <b>Change every month</b> updates the default for all months you haven't customized (customized ones show ↺).`,
+    ].filter(Boolean).join('<br>');
+
+    const year = key.slice(0, 4);
+    $('#budYearTitle').textContent = `${year} — expected vs actual`;
+    const months = Array.from({ length: 12 }, (_, i) => `${year}-${String(i + 1).padStart(2, '0')}`);
+    const yr = months.map((k) => ({ k, ...monthPlan(k).t, future: k > curKey }));
+    const sumF = (f) => yr.reduce((s, m) => s + (m.future ? 0 : m[f]), 0);
+    const netCell = (v) => `<td class="${v >= 0 ? 'down' : 'up'}">${v >= 0 ? '+' : '−'}${fmt(Math.abs(v))}</td>`;
+    $('#budYear').innerHTML = `<thead><tr><th>Month</th><th>Expected</th><th>Actual</th><th>Over budget</th><th>Remaining</th><th>Net</th></tr></thead>
+      <tbody>${yr.map((m) => `<tr class="cell-row${m.k === key ? ' current' : ''}" data-k="${m.k}">
+        <td><b>${S.MONTHS[Number(m.k.slice(5)) - 1]}</b></td>
+        <td>${fmt(m.expected)}</td>
+        <td>${m.future && !m.actual ? '<span class="muted">—</span>' : fmt(m.actual)}</td>
+        <td class="${m.over ? 'up' : 'muted'}">${m.future ? '—' : fmt(m.over)}</td>
+        <td class="${m.remaining ? 'down' : 'muted'}">${m.future ? '—' : fmt(m.remaining)}</td>
+        ${m.future ? '<td class="muted">—</td>' : netCell(m.expected - m.actual)}
+      </tr>`).join('')}</tbody>
+      <tfoot><tr><td>Total so far</td><td>${fmt(sumF('expected'))}</td><td>${fmt(sumF('actual'))}</td><td class="up">${fmt(sumF('over'))}</td><td class="down">${fmt(sumF('remaining'))}</td>${netCell(sumF('expected') - sumF('actual'))}</tr></tfoot>`;
+  }
+
+  function applyBudgetRows(month, rows) {
+    state.budgets = state.budgets.filter((x) => x.month !== month).concat(rows);
+    indexBudgets();
+  }
+  async function saveExpected(bucketId, amount) {
+    const key = state.budMonth;
+    if (state.budScope === 'default') {
+      const upd = await api('PUT', `/api/buckets/${bucketId}`, { monthlyBudget: amount });
+      state.buckets = state.buckets.map((b) => (b.id === bucketId ? upd : b));
+      // this month follows the new default too
+      if (budgetMap.has(`${bucketId}|${key}`)) applyBudgetRows(key, await api('PUT', '/api/budgets', { month: key, items: [{ bucketId, amount: null }] }));
+    } else {
+      applyBudgetRows(key, await api('PUT', '/api/budgets', { month: key, items: [{ bucketId, amount: amount ?? 0 }] }));
+    }
+  }
+
+  $('#budPrev').addEventListener('click', () => { state.budMonth = shiftKey(state.budMonth, -1); renderBudget(); });
+  $('#budNext').addEventListener('click', () => { state.budMonth = shiftKey(state.budMonth, 1); renderBudget(); });
+  $('#budToday').addEventListener('click', () => { state.budMonth = monthKey(); renderBudget(); });
+  $$('[data-scope]').forEach((x) => x.addEventListener('click', () => { state.budScope = x.dataset.scope; renderBudget(); }));
+  $('#budYear').addEventListener('click', (e) => {
+    const tr = e.target.closest('tr[data-k]'); if (!tr) return;
+    state.budMonth = tr.dataset.k; renderBudget();
+    $('#budMonthTitle').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+  $('#budTable').addEventListener('change', async (e) => {
+    const inp = e.target.closest('.exp-in'); if (!inp) return;
+    const id = Number(inp.closest('tr').dataset.id);
+    const raw = inp.value.trim();
+    const v = raw === '' ? null : S.evalAmount(raw);
+    if (raw !== '' && (v == null || v < 0)) { toast('Enter an amount of 0 or more (or leave empty)'); return renderBudget(); }
+    try {
+      await saveExpected(id, v);
+      renderBudget(); renderBucketGrid();
+      toast(state.budScope === 'default' ? 'Saved for every month' : `Saved for ${keyLabel(state.budMonth)}`);
+    } catch (err) { toast(err.message); renderBudget(); }
+  });
+  $('#budTable').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || !e.target.classList.contains('exp-in')) return;
+    e.preventDefault();
+    const all = $$('.exp-in', $('#budTable'));
+    const idx = all.indexOf(e.target);
+    e.target.blur(); // triggers change → re-render; refocus the next row afterwards
+    setTimeout(() => { const next = $$('.exp-in', $('#budTable'))[idx + 1]; if (next) { next.focus(); next.select(); } }, 50);
+  });
+  $('#budTable').addEventListener('click', async (e) => {
+    const btn = e.target.closest('.reset-exp'); if (!btn) return;
+    const id = Number(btn.closest('tr').dataset.id);
+    try {
+      applyBudgetRows(state.budMonth, await api('PUT', '/api/budgets', { month: state.budMonth, items: [{ bucketId: id, amount: null }] }));
+      renderBudget(); renderBucketGrid();
+    } catch (err) { toast(err.message); }
+  });
+  $('#budCopy').addEventListener('click', async () => {
+    const key = state.budMonth, prev = shiftKey(key, -1);
+    const items = state.buckets.filter((b) => !b.archived).map((b) => ({ bucketId: b.id, amount: expectedFor(b, prev) }));
+    if (!items.some((i) => i.amount != null)) return toast(`${keyLabel(prev)} has no plan to copy`);
+    if (state.budgets.some((x) => x.month === key) && !confirm(`Replace ${keyLabel(key)}'s plan with ${keyLabel(prev)}'s?`)) return;
+    try {
+      // amounts equal to the default are stored as "use default" so later default changes still flow through
+      const body = items.map((i) => ({ bucketId: i.bucketId, amount: i.amount === (bucketById(i.bucketId).monthlyBudget ?? null) ? null : i.amount ?? 0 }));
+      applyBudgetRows(key, await api('PUT', '/api/budgets', { month: key, items: body }));
+      renderBudget(); renderBucketGrid();
+      toast(`Copied ${keyLabel(prev)}'s plan`);
+    } catch (err) { toast(err.message); }
+  });
 
   // ---------- SETTINGS ----------
   function renderSettings() {

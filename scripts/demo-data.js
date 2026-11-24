@@ -26,8 +26,8 @@ export function demoExpenses(today = new Date()) {
     if (dow === 0) add('Giving', 10000, 'Church');
     if (dom === 1) add('House insurance/tax + HOA', 25000, 'HOA');
     if (dom === 10 && mon % 6 === 0) add('House insurance/tax + HOA', 180000, 'Property tax');
-    if (mon >= 3 && mon <= 9 && dow === 3) add('Household + grass', 4500, 'Lawn service');
-    if (rnd() < 0.04) add('Household + grass', 2000 + rnd() * 12000, pick(['Home Depot', 'Target', 'Amazon']));
+    if (mon >= 3 && mon <= 9 && dow === 3) add('Household', 4500, 'Lawn service');
+    if (rnd() < 0.04) add('Household', 2000 + rnd() * 12000, pick(['Home Depot', 'Target', 'Amazon']));
     if (rnd() < 0.03) add('Health/Beauty', 2500 + rnd() * 9000, pick(['CVS', 'Haircut', 'Dentist copay']));
     if (rnd() < 0.025) add('Clothes', 3000 + rnd() * 9000, pick(['Old Navy', 'Shoes', 'Kohls']));
     if (dom === 5 && mon !== 6 && mon !== 7) add('Education', 15000, 'Piano lessons');

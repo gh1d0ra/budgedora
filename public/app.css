@@ -323,3 +323,37 @@ dialog.wide { width: min(760px, calc(100vw - 32px)); }
 .scroll-y { max-height: 300px; overflow-y: auto; }
 #deleteDialog p { line-height: 1.5; }
 .backup-row { margin-top: 14px; align-items: center; }
+
+/* ---------- budget tab ---------- */
+#view-budget { max-width: 900px; margin: 0 auto; }
+.budget-head { display: grid; gap: 10px; }
+.month-nav { display: flex; align-items: center; justify-content: center; gap: 12px; }
+.month-nav h2 { margin: 0; min-width: 200px; text-align: center; font-size: 22px; }
+.big-arrow { font-size: 26px; line-height: 1; padding: 4px 14px; }
+.budget-actions { justify-content: center; align-items: center; }
+.small-seg { margin: 0; display: inline-grid; }
+.small-seg .seg-btn { font-size: 12.5px; padding: 6px 10px; }
+.budget-tbl td, .budget-tbl th { vertical-align: middle; }
+.exp-cell { display: flex; align-items: center; justify-content: flex-end; gap: 2px; }
+.exp-in { width: 110px; text-align: right; padding: 6px 8px; font-variant-numeric: tabular-nums; }
+.budget-bar.wide { width: 120px; }
+.bar-col { width: 130px; }
+.budget-year tr.cell-row { cursor: pointer; }
+.budget-year tr.cell-row:hover td { background: var(--surface-2); }
+.budget-year tr.current td { background: var(--accent-soft); }
+@media (max-width: 720px) {
+  .bar-col { display: none; }
+  .exp-in { width: 84px; }
+  .month-nav h2 { min-width: 0; font-size: 19px; }
+  .tabs button { padding: 6px 4px; font-size: 11px; }
+}
+@media (max-width: 720px) {
+  .budget-tbl thead { display: none; }
+  .budget-tbl, .budget-tbl tbody, .budget-tbl tfoot { display: block; }
+  .budget-tbl tr { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px 8px; padding: 10px 0; border-bottom: 1px solid var(--border); align-items: center; }
+  .budget-tbl td { border: 0; padding: 2px 0; text-align: left; white-space: normal; }
+  .budget-tbl td:first-child { grid-column: 1 / 3; font-weight: 600; }
+  .budget-tbl td.exp-cell { grid-column: 3; justify-content: flex-end; text-align: right; }
+  .budget-tbl td[data-label]::before { content: attr(data-label); display: block; font-size: 11px; color: var(--muted); font-weight: 600; }
+  .budget-tbl tfoot tr { border-bottom: 0; }
+}

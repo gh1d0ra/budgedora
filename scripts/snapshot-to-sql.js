@@ -28,6 +28,7 @@ const lines = [
   ...insert('users', users),
   ...insert('buckets', snap.buckets.filter((b) => ids.has(b.user_id))),
   ...insert('expenses', snap.expenses.filter((e) => ids.has(e.user_id))),
+  ...insert('budgets', (snap.budgets || []).filter((b) => ids.has(b.user_id))),
 ];
 fs.writeFileSync(out, lines.join('\n') + '\n');
 console.log(`Snapshot ${snap.takenAt}: wrote ${lines.length} statements for ${users.length} user(s) to ${out}`);

@@ -362,10 +362,12 @@
 
     // budgets (only meaningful for single months)
     if (period.kind === 'month') {
-      const over = ctx.buckets.filter((b) => b.monthlyBudget && (byB.get(b.id) || 0) > b.monthlyBudget);
-      over.forEach((b) => out.push({ icon: '🚨', html: `${esc(b.name)} is over budget: ${f(byB.get(b.id))} of ${f(b.monthlyBudget)}.` }));
-      const near = ctx.buckets.filter((b) => b.monthlyBudget && (byB.get(b.id) || 0) <= b.monthlyBudget && (byB.get(b.id) || 0) >= 0.85 * b.monthlyBudget);
-      near.forEach((b) => out.push({ icon: '⚠️', html: `${esc(b.name)} is at ${Math.round(((byB.get(b.id) || 0) / b.monthlyBudget) * 100)}% of its ${f(b.monthlyBudget)} budget.` }));
+      const key = period.from.slice(0, 7);
+      const exp = (b) => (ctx.expectedFor ? ctx.expectedFor(b, key) : b.monthlyBudget);
+      const over = ctx.buckets.filter((b) => exp(b) && (byB.get(b.id) || 0) > exp(b));
+      over.forEach((b) => out.push({ icon: '🚨', html: `${esc(b.name)} is over budget: ${f(byB.get(b.id))} of ${f(exp(b))}.` }));
+      const near = ctx.buckets.filter((b) => exp(b) && (byB.get(b.id) || 0) <= exp(b) && (byB.get(b.id) || 0) >= 0.85 * exp(b));
+      near.forEach((b) => out.push({ icon: '⚠️', html: `${esc(b.name)} is at ${Math.round(((byB.get(b.id) || 0) / exp(b)) * 100)}% of its ${f(exp(b))} budget.` }));
     }
 
     // unusual single expense: far above that bucket's typical ticket

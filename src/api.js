@@ -6,7 +6,7 @@
 export const DEFAULT_BUCKETS = [
   ['Groceries', '🛒', '#16a34a'],
   ['Restaurants', '🍽️', '#ea580c'],
-  ['Household + grass', '🏡', '#65a30d'],
+  ['Household', '🏡', '#65a30d'],
   ['Car/Gas', '⛽', '#2563eb'],
   ['House insurance/tax + HOA', '🧾', '#7c3aed'],
   ['Utilities', '💡', '#ca8a04'],
@@ -332,11 +332,39 @@ async function route(req, db, ip, admins, backup) {
   }
 
   if (pathname === '/api/data' && method === 'GET') {
-    const [buckets, expenses] = await Promise.all([
+    const [buckets, expenses, budgets] = await Promise.all([
       db.all('SELECT * FROM buckets WHERE user_id = ? ORDER BY sort, id', uid),
       db.all('SELECT * FROM expenses WHERE user_id = ? ORDER BY date DESC, id DESC', uid),
+      db.all('SELECT bucket_id, month, amount FROM budgets WHERE user_id = ? ORDER BY month', uid),
     ]);
-    return json(200, { user, buckets: buckets.map(bucketOut), expenses: expenses.map(expenseOut) });
+    return json(200, {
+      user, buckets: buckets.map(bucketOut), expenses: expenses.map(expenseOut),
+      budgets: budgets.map((b) => ({ bucketId: b.bucket_id, month: b.month, amount: b.amount / 100 })),
+    });
+  }
+
+  // ----- month plan: expected amount per bucket for one month -----
+  // PUT { month: 'YYYY-MM', items: [{ bucketId, amount }] }   amount null → back to the bucket's default
+  if (pathname === '/api/budgets' && method === 'PUT') {
+    const b = await readBody(req);
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(String(b.month))) return fail(400, 'Pick a month.');
+    if (!Array.isArray(b.items) || !b.items.length) return fail(400, 'Nothing to save.');
+    const owned = new Set((await db.all('SELECT id FROM buckets WHERE user_id = ?', uid)).map((x) => x.id));
+    const stmts = [];
+    for (const it of b.items.slice(0, 500)) {
+      const bid = Number(it.bucketId);
+      if (!owned.has(bid)) return fail(400, 'Unknown bucket.');
+      if (it.amount === null || it.amount === '' || it.amount === undefined) {
+        stmts.push(['DELETE FROM budgets WHERE user_id = ? AND bucket_id = ? AND month = ?', uid, bid, b.month]);
+        continue;
+      }
+      const cents = Math.round(Number(it.amount) * 100);
+      if (!Number.isFinite(cents) || cents < 0 || cents >= 1e12) return fail(400, 'Expected amounts must be 0 or more.');
+      stmts.push(['INSERT INTO budgets (user_id, bucket_id, month, amount) VALUES (?, ?, ?, ?) ON CONFLICT (user_id, bucket_id, month) DO UPDATE SET amount = excluded.amount', uid, bid, b.month, cents]);
+    }
+    await db.batch(stmts);
+    const rows = await db.all('SELECT bucket_id, month, amount FROM budgets WHERE user_id = ? AND month = ?', uid, b.month);
+    return json(200, rows.map((r) => ({ bucketId: r.bucket_id, month: r.month, amount: r.amount / 100 })));
   }
 
   // ----- buckets -----
@@ -455,10 +483,11 @@ async function route(req, db, ip, admins, backup) {
 // ---------- backups ----------
 /** Full snapshot of everything needed to restore accounts (not sessions/attempts/tokens). */
 export async function snapshot(db) {
-  const [users, buckets, expenses] = await Promise.all([
+  const [users, buckets, expenses, budgets] = await Promise.all([
     db.all('SELECT * FROM users ORDER BY id'),
     db.all('SELECT * FROM buckets ORDER BY id'),
     db.all('SELECT * FROM expenses ORDER BY id'),
+    db.all('SELECT * FROM budgets ORDER BY user_id, month'),
   ]);
-  return { version: 2, takenAt: new Date().toISOString(), users, buckets, expenses };
+  return { version: 3, takenAt: new Date().toISOString(), users, buckets, expenses, budgets };
 }
