@@ -30,7 +30,38 @@ Monarch / Copilot (clean reports, month-to-date pace) — minus the bank syncing
 Default buckets: Groceries, Restaurants, Household + grass, Car/Gas, House insurance/tax + HOA, Utilities,
 Education, Giving, Health/Beauty, Clothes, Entertainment, Vacation. Rename, recolor, reorder, budget or archive any of them.
 
-**Data** — CSV export/import (`date,bucket,amount,note`).
+**Refunds** — negative amounts (or the ↩ Refund toggle) subtract from a bucket.
+
+**Data** — import your **Excel budget** (one sheet per month, one column per category; read in the browser and
+reviewed before saving), CSV export/import (`date,bucket,amount,note`).
+
+## Security
+
+- Passwords: PBKDF2-SHA256 (100k iterations), constant-time compare, same timing for unknown emails.
+- Account lockout: 5 wrong passwords in a row → locked 15 min, doubling on each further miss (max 24 h); reset on success.
+  Plus 30 attempts / 15 min per IP across all accounts.
+- Sessions: random 256-bit tokens in HttpOnly, SameSite=Lax, Secure cookies; 60 days; password change/reset signs out other devices.
+- CSRF: state-changing requests must be JSON. XSS: all user text is escaped; strict Content-Security-Policy (no inline scripts, no eval),
+  plus X-Frame-Options, nosniff, HSTS, no-referrer, Permissions-Policy.
+- Password reset: the family admin (`ADMIN_EMAILS` in wrangler.toml) creates a one-time link (24 h, only its hash is stored).
+- Account deletion: 3-step confirmation; soft delete — the account is hidden and signed out, all data kept; the admin can restore it.
+- The admin panel shows account names, status and counts — never anyone's expenses.
+
+## Backups
+
+1. **Cloudflare D1 Time Travel** — point-in-time restore of the whole database (built in).
+2. **Daily snapshots in KV** (cron 04:17 UTC): `daily/…` kept 35 days, `monthly/…` forever; admin "Back up now" → `manual/…` kept 180 days.
+3. **Weekly export to this PC** — `scripts/install-backup-task.ps1` registers a Windows task (Sundays 8 PM) running
+   `scripts/backup-local.ps1` → `DocumentsBudgedora Backupsudgedora-YYYY-MM-DD.sql` (newest 52 kept).
+
+Restore from a snapshot (upserts; `--user` restores just one account):
+
+```bash
+wrangler kv key list --binding BACKUPS --remote
+wrangler kv key get --binding BACKUPS "daily/2026-11-24.json.gz" --remote > snap.json.gz
+node scripts/snapshot-to-sql.js snap.json.gz restore.sql [--user someone@example.com]
+wrangler d1 execute budgedora --remote --file=restore.sql
+```
 
 ## Run it
 
@@ -51,6 +82,7 @@ Live at **https://budgedora.igorrash.workers.dev** (free tier is plenty for a fa
 npm i -g wrangler && wrangler login      # once
 wrangler d1 create budgedora             # once — put the id in wrangler.toml
 npm run cf:db:init                       # once — creates the tables (safe to re-run)
+wrangler kv namespace create budgedora-backups   # once — put the id in wrangler.toml
 npm run deploy                           # every update
 ```
 
@@ -61,14 +93,15 @@ node scripts/demo-sql.js someone@example.com theirpassword "Name" demo.sql
 wrangler d1 execute budgedora --remote --file=demo.sql
 ```
 
-Back up the live data any time: `wrangler d1 export budgedora --remote --output backup.sql`.
+Upgrading an older database: run each new file in `src/migrations/` once with `wrangler d1 execute budgedora --remote --file=…`.
 
 ## Structure
 
 ```
 src/api.js           the JSON API (shared by Workers and Node)
 src/worker.js        Cloudflare Worker entry (D1 + static assets)
-src/schema.sql       database schema
+src/schema.sql       database schema (fresh installs)
+src/migrations/      schema changes for existing databases
 server.js            local Node server (node:sqlite)
 wrangler.toml        Cloudflare config
 public/index.html    the single-page app
@@ -76,4 +109,7 @@ public/app.js        UI (entry, history, reports, settings)
 public/smart.js      periods, natural-language questions, insights, suggestions
 public/app.css       styles (light + dark)
 scripts/seed-demo.js local demo data
+scripts/demo-sql.js  demo account for the live database
+scripts/backup-*.ps1 weekly local backup + task installer
+scripts/snapshot-to-sql.js  restore a KV snapshot
 ```

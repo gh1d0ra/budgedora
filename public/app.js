@@ -63,15 +63,38 @@
 
   // ---------- auth ----------
   let authMode = 'login';
+  const resetToken = () => (location.hash.match(/^#reset=([0-9a-f]{64})$/) || [])[1];
   function showAuth() {
     $('#app').hidden = true;
     $('#auth').hidden = false;
-    $('#authForm [name=email]').focus();
+    const resetting = !!resetToken();
+    $('#resetForm').hidden = !resetting;
+    $('#authForm').hidden = resetting;
+    $('.seg').hidden = resetting;
+    (resetting ? $('#resetForm [name=password]') : $('#authForm [name=email]')).focus();
   }
+  $('#forgotBtn').addEventListener('click', () => { $('#forgotInfo').hidden = !$('#forgotInfo').hidden; });
+  $('#resetCancel').addEventListener('click', () => { history.replaceState(null, '', location.pathname); showAuth(); });
+  $('#resetForm').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const f = ev.target;
+    const err = $('#resetError');
+    err.hidden = true;
+    if (f.password.value !== f.password2.value) { err.textContent = 'The two passwords don’t match.'; err.hidden = false; return; }
+    try {
+      await api('POST', '/api/reset', { token: resetToken(), password: f.password.value });
+      f.reset();
+      history.replaceState(null, '', location.pathname);
+      await load();
+      toast('Password changed — you’re signed in');
+    } catch (e) { err.textContent = e.message; err.hidden = false; }
+  });
   $$('[data-auth]').forEach((b) => b.addEventListener('click', () => {
     authMode = b.dataset.auth;
     $$('[data-auth]').forEach((x) => x.classList.toggle('active', x === b));
     $$('.signup-only').forEach((x) => (x.hidden = authMode !== 'signup'));
+    $$('.login-only').forEach((x) => (x.hidden = authMode !== 'login'));
+    $('#forgotInfo').hidden = true;
     $('#authSubmit').textContent = authMode === 'signup' ? 'Create account' : 'Sign in';
     $('#authForm [name=password]').autocomplete = authMode === 'signup' ? 'new-password' : 'current-password';
     $('#authError').hidden = true;
@@ -92,6 +115,7 @@
   });
 
   async function load() {
+    if (resetToken()) return showAuth();
     try {
       const data = await api('GET', '/api/data');
       state.user = data.user;
@@ -192,6 +216,7 @@
     const raw = $('#amount').value;
     const v = S.evalAmount(raw);
     $('#amountHint').innerHTML = v != null && /[+\-*/]/.test(raw.replace(/^-/, '')) ? `= ${fmt(v)}` : '&nbsp;';
+    syncRefund();
     const sug = S.suggestFromAmount(v, ctx()).filter((s) => bucketById(s.bucketId) && !bucketById(s.bucketId).archived);
     const box = $('#smartSuggest');
     box.hidden = !sug.length;
@@ -208,6 +233,17 @@
     };
   });
 
+  // Refunds: phone number pads often have no minus key, so a toggle flips the sign.
+  let refund = false;
+  function syncRefund() {
+    const v = S.evalAmount($('#amount').value);
+    const isNeg = refund || (v != null && v < 0);
+    $('#refundBtn').classList.toggle('active', isNeg);
+    $('#refundBtn').setAttribute('aria-pressed', String(isNeg));
+    $('#saveBtn').textContent = isNeg ? 'Save refund' : 'Save expense';
+  }
+  $('#refundBtn').addEventListener('click', () => { refund = !refund; syncRefund(); $('#amount').focus(); });
+
   $('#note').addEventListener('input', () => {
     if (state.userPickedBucket) return;
     const b = S.suggestBucket($('#note').value, ctx());
@@ -217,8 +253,9 @@
 
   $('#addForm').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const amount = S.evalAmount($('#amount').value);
-    if (!amount || amount <= 0) { toast('Enter an amount first'); $('#amount').focus(); return; }
+    let amount = S.evalAmount($('#amount').value);
+    if (!amount) { toast('Enter an amount first'); $('#amount').focus(); return; }
+    if (refund) amount = -Math.abs(amount);
     if (!state.selectedBucket) { toast('Pick a bucket'); $('#bucketGrid').scrollIntoView({ block: 'center', behavior: 'smooth' }); return; }
     const body = { amount, bucketId: state.selectedBucket, date: $('#date').value || S.ymd(new Date()), note: $('#note').value.trim() };
     $('#saveBtn').disabled = true;
@@ -227,9 +264,9 @@
       state.expenses.push(exp); sortExpenses();
       const b = bucketById(exp.bucketId);
       $('#amount').value = ''; sizeAmount(); $('#note').value = ''; $('#amountHint').innerHTML = '&nbsp;'; $('#smartSuggest').hidden = true;
-      state.selectedBucket = null; state.userPickedBucket = false;
+      state.selectedBucket = null; state.userPickedBucket = false; refund = false; syncRefund();
       renderTab();
-      toast(`${fmt(exp.amount)} → ${b.icon} ${b.name}`, { label: 'Undo', fn: () => removeExpense(exp.id) });
+      toast(`${exp.amount < 0 ? 'Refund ' : ''}${fmt(exp.amount)} → ${b.icon} ${b.name}`, { label: 'Undo', fn: () => removeExpense(exp.id) });
       $('#amount').focus();
     } catch (err) { toast(err.message); } finally { $('#saveBtn').disabled = false; }
   });
@@ -250,7 +287,8 @@
     const lmTo = S.ymd(new Date(t.getFullYear(), t.getMonth() - 1, Math.min(t.getDate(), new Date(t.getFullYear(), t.getMonth(), 0).getDate())));
     const lmSame = S.sum(state.expenses.filter((e) => e.date >= lmFrom && e.date <= lmTo));
     const budget = activeBuckets().reduce((s, b) => s + (b.monthlyBudget || 0), 0);
-    const byB = [...monthSpend().entries()].map(([id, v]) => ({ b: bucketById(id), v })).filter((x) => x.b).sort((a, b) => b.v - a.v);
+    const byB = [...monthSpend().entries()].map(([id, v]) => ({ b: bucketById(id), v })).filter((x) => x.b && x.v > 0).sort((a, b) => b.v - a.v);
+    const stackTotal = byB.reduce((s, x) => s + x.v, 0);
     let cmp = '';
     if (lmSame) {
       const d = Math.round(((total - lmSame) / lmSame) * 100);
@@ -259,7 +297,7 @@
     $('#monthCard').innerHTML = `
       <div class="mc-top"><div><div class="muted small">${S.MONTHS[t.getMonth()]} so far</div><div class="mc-total">${fmt(total)}</div></div>
       <div class="mc-sub" style="text-align:right">${cmp}${budget ? `<div>${fmt(Math.max(0, budget - total))} left of ${fmt(budget)} budget</div>` : ''}</div></div>
-      ${total ? `<div class="stack">${byB.map((x) => `<span title="${esc(x.b.name)} ${fmt(x.v)}" style="width:${(x.v / total) * 100}%;background:${esc(x.b.color)}"></span>`).join('')}</div>
+      ${stackTotal ? `<div class="stack">${byB.map((x) => `<span title="${esc(x.b.name)} ${fmt(x.v)}" style="width:${(x.v / stackTotal) * 100}%;background:${esc(x.b.color)}"></span>`).join('')}</div>
       <div class="legend">${byB.slice(0, 6).map((x) => `<span><i class="dot" style="background:${esc(x.b.color)}"></i>${esc(x.b.name)} ${fmtShort(x.v)}</span>`).join('')}</div>` : '<p class="muted small" style="margin:8px 0 0">Nothing logged this month yet.</p>'}`;
   }
 
@@ -268,7 +306,7 @@
     return `<li class="tx" data-id="${e.id}" style="--c:${esc(b.color)}">
       <span class="ti">${esc(b.icon || '•')}</span>
       <span class="tm"><div class="tn">${esc(e.note || b.name)}</div><div class="td">${esc(b.name)} · ${fmtDate(e.date)}</div></span>
-      <span class="ta">${fmt(e.amount)}</span></li>`;
+      <span class="ta${e.amount < 0 ? ' refund' : ''}">${e.amount < 0 ? '↩ ' : ''}${fmt(e.amount)}</span></li>`;
   }
   function renderRecent() {
     $('#recentList').innerHTML = state.expenses.slice(0, 6).map(txHtml).join('') || '<li class="empty">Your expenses will show up here.</li>';
@@ -590,7 +628,256 @@
     const f = $('#accountForm');
     f.name.value = state.user.name;
     f.currency.value = state.user.currency;
+    $('#adminCard').hidden = !state.user.isAdmin;
+    if (state.user.isAdmin) renderAdmin();
   }
+
+  // ---------- admin: family accounts ----------
+  async function renderAdmin() {
+    try {
+      const users = await api('GET', '/api/admin/users');
+      $('#adminTable').innerHTML = `<thead><tr><th>Account</th><th>Status</th><th>Expenses</th><th>Last entry</th><th></th></tr></thead><tbody>${users.map((u) => `
+        <tr data-id="${u.id}" data-email="${esc(u.email)}">
+          <td><b>${esc(u.name)}</b>${u.isAdmin ? ' 👑' : ''}<div class="muted small">${esc(u.email)}</div></td>
+          <td>${u.deletedAt ? '<span class="badge del">Deleted</span>' : u.locked ? '<span class="badge lock">Locked</span>' : '<span class="badge ok">Active</span>'}</td>
+          <td>${u.expenses}</td>
+          <td>${u.lastExpense ? fmtDate(u.lastExpense) : '—'}</td>
+          <td class="acts-cell">
+            ${u.deletedAt ? '<button class="btn small-btn" data-admin="restore">Restore</button>' : ''}
+            ${u.locked ? '<button class="btn small-btn" data-admin="unlock">Unlock</button>' : ''}
+            <button class="btn small-btn" data-admin="reset-link">Reset link</button>
+          </td></tr>`).join('')}</tbody>`;
+    } catch (err) { $('#adminTable').innerHTML = `<tbody><tr><td class="error">${esc(err.message)}</td></tr></tbody>`; }
+  }
+  $('#adminRefresh').addEventListener('click', renderAdmin);
+  $('#backupNow').addEventListener('click', async () => {
+    const btn = $('#backupNow');
+    btn.disabled = true;
+    try {
+      const r = await api('POST', '/api/admin/backup');
+      $('#backupStatus').textContent = `✅ Saved ${r.key} — ${r.users} accounts, ${r.expenses} expenses (${Math.round(r.bytes / 1024)} KB, kept 180 days).`;
+    } catch (err) { $('#backupStatus').textContent = `❌ Backup failed: ${err.message}`; }
+    finally { btn.disabled = false; }
+  });
+  $('#adminTable').addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-admin]'); if (!btn) return;
+    const tr = btn.closest('tr');
+    const act = btn.dataset.admin;
+    if (act === 'restore' && !confirm(`Restore ${tr.dataset.email}? They'll be able to sign in again with their old password.`)) return;
+    try {
+      const r = await api('POST', `/api/admin/users/${tr.dataset.id}/${act}`);
+      if (act === 'reset-link') {
+        const box = $('#resetLinkBox');
+        box.hidden = false;
+        box.innerHTML = `<p>One-time reset link for <b>${esc(r.email)}</b> (valid ${r.expiresInHours} h). Send it to them privately:</p>
+          <div class="row gap"><input readonly value="${esc(r.link)}" id="resetLinkInput"><button class="btn primary" type="button" id="copyReset">Copy</button></div>`;
+        $('#copyReset').onclick = async () => {
+          try { await navigator.clipboard.writeText(r.link); toast('Link copied'); } catch { $('#resetLinkInput').select(); }
+        };
+      } else {
+        toast(act === 'restore' ? 'Account restored' : 'Account unlocked');
+        renderAdmin();
+      }
+    } catch (err) { toast(err.message); }
+  });
+
+  // ---------- delete account (3 steps; soft delete) ----------
+  const del = $('#deleteDialog');
+  function delStep(n) { $$('[data-step]', del).forEach((s) => (s.hidden = s.dataset.step !== String(n))); del.dataset.step = n; }
+  $('#deleteAccountBtn').addEventListener('click', () => {
+    $('#deleteForm').reset(); $('#deleteError').hidden = true;
+    $('#deleteEmail').textContent = state.user.email;
+    delStep(1); del.showModal();
+  });
+  del.addEventListener('click', (e) => {
+    if (e.target.closest('[data-cancel]')) return del.close();
+    if (!e.target.closest('[data-next]')) return;
+    const f = $('#deleteForm');
+    if (del.dataset.step === '1') {
+      if (!f.understand.checked) return toast('Tick “I understand” to continue');
+      delStep(2); f.password.focus();
+    } else if (del.dataset.step === '2') {
+      const err = $('#deleteError');
+      if (!f.password.value) { err.textContent = 'Enter your password.'; err.hidden = false; return; }
+      if (f.confirm.value.trim() !== 'DELETE') { err.textContent = 'Type DELETE (in capitals) to confirm.'; err.hidden = false; return; }
+      delStep(3);
+    }
+  });
+  $('#deleteForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    try {
+      await api('POST', '/api/account/delete', { password: f.password.value, confirm: f.confirm.value.trim() });
+      del.close();
+      state.user = null; state.expenses = []; state.buckets = [];
+      showAuth();
+      toast('Account deleted. Ask the family admin if you ever want it back.');
+    } catch (err) { delStep(2); $('#deleteError').textContent = err.message; $('#deleteError').hidden = false; }
+  });
+
+  // ---------- Excel import (read in the browser, reviewed before saving) ----------
+  const XLSX_URL = 'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js';
+  const MONTH_RE = /^\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s*'?\s*(\d{2}|\d{4})\s*$/i;
+  const SKIP_HEADER = /^(month|date|total|totals|income|income avg|expected expenses|expenses|overbudget|over budget|remaining|budget|sum|notes?)$/i;
+  let xlsxPlan = null;
+
+  function loadScript(src) {
+    return new Promise((resolve, reject) => {
+      if (window.XLSX) return resolve();
+      const s = document.createElement('script');
+      s.src = src; s.onload = resolve; s.onerror = () => reject(new Error('Could not load the Excel reader. Check your connection.'));
+      document.head.appendChild(s);
+    });
+  }
+  const stemW = (w) => w.toLowerCase().replace(/[^a-z]/g, '').replace(/ies$/, 'y').replace(/s$/, '');
+  /** Best existing bucket for an Excel column header (first word counts double), or null. */
+  function guessBucket(header) {
+    const words = header.split(/[^A-Za-z]+/).map(stemW).filter((w) => w.length >= 3);
+    let best = null, bestScore = 0;
+    for (const b of state.buckets) {
+      const bw = new Set(b.name.split(/[^A-Za-z]+/).map(stemW).filter((w) => w.length >= 3));
+      const score = words.reduce((s, w, i) => s + (bw.has(w) ? (i === 0 ? 2 : 1) : 0), 0);
+      if (score > bestScore) { best = b; bestScore = score; }
+    }
+    return best;
+  }
+
+  function parseWorkbook(wb) {
+    const months = [], skipped = [];
+    const headers = new Map(); // header → {rows, total}
+    for (const name of wb.SheetNames) {
+      const m = name.match(MONTH_RE);
+      if (!m) { skipped.push(name); continue; }
+      const mi = S.MON.findIndex((x) => m[1].toLowerCase().startsWith(x.toLowerCase()));
+      const y = m[2].length === 2 ? 2000 + Number(m[2]) : Number(m[2]);
+      const ws = wb.Sheets[name];
+      if (!ws['!ref']) { skipped.push(name); continue; }
+      const range = XLSX.utils.decode_range(ws['!ref']);
+      // header row = first row with at least 2 text cells
+      let hr = -1;
+      for (let r = range.s.r; r <= Math.min(range.e.r, range.s.r + 10) && hr < 0; r++) {
+        let txt = 0;
+        for (let c = range.s.c; c <= range.e.c; c++) { const cell = ws[XLSX.utils.encode_cell({ r, c })]; if (cell && cell.t === 's' && String(cell.v).trim()) txt++; }
+        if (txt >= 2) hr = r;
+      }
+      if (hr < 0) { skipped.push(name); continue; }
+      const cols = [];
+      for (let c = range.s.c; c <= range.e.c; c++) {
+        const cell = ws[XLSX.utils.encode_cell({ r: hr, c })];
+        const h = cell ? String(cell.v).replace(/\s+/g, ' ').trim() : '';
+        if (h) cols.push({ c, h });
+      }
+      const entries = [];
+      for (let r = hr + 1; r <= range.e.r; r++) {
+        for (const { c, h } of cols) {
+          const cell = ws[XLSX.utils.encode_cell({ r, c })];
+          if (!cell) continue;
+          if (cell.f && /\b(SUM|SUBTOTAL|AVERAGE|TOTAL)\s*\(/i.test(cell.f)) continue; // totals rows
+          let v = cell.t === 'n' ? cell.v : (cell.t === 's' && /^\s*-?\$?\d+(\.\d+)?\s*$/.test(cell.v) ? Number(String(cell.v).replace(/[$\s]/g, '')) : null);
+          if (v == null || !Number.isFinite(v) || Math.abs(v) < 0.005) continue;
+          v = Math.round(v * 100) / 100;
+          entries.push({ h, amount: v });
+          const hs = headers.get(h) || { rows: 0, total: 0 };
+          hs.rows++; hs.total += v; headers.set(h, hs);
+        }
+      }
+      months.push({ sheet: name, y, m: mi, key: `${y}-${String(mi + 1).padStart(2, '0')}`, entries });
+    }
+    months.sort((a, b) => (a.key < b.key ? -1 : 1));
+    return { months, skipped, headers };
+  }
+
+  function renderXlsxPlan() {
+    const p = xlsxPlan;
+    const opts = (sel) => `<option value="__skip" ${sel === '__skip' ? 'selected' : ''}>— Skip this column —</option>` +
+      state.buckets.filter((b) => !b.archived).map((b) => `<option value="${b.id}" ${String(sel) === String(b.id) ? 'selected' : ''}>${esc(b.icon)} ${esc(b.name)}</option>`).join('');
+    const mapRows = [...p.headers.entries()].map(([h, s]) => {
+      const sel = p.map.get(h);
+      return `<tr><td><b>${esc(h)}</b></td><td>${s.rows}</td><td>${fmt(s.total)}</td>
+        <td><select data-h="${esc(h)}">${opts(sel)}<option value="__new" ${sel === '__new' ? 'selected' : ''}>➕ New bucket “${esc(h)}”</option></select></td></tr>`;
+    }).join('');
+    const existing = (key) => S.sum(state.expenses.filter((e) => e.date.startsWith(key)));
+    const monthRows = p.months.map((mo, i) => {
+      const kept = mo.entries.filter((e) => p.map.get(e.h) !== '__skip');
+      const ex = existing(mo.key);
+      return `<tr><td><label class="toggle"><input type="checkbox" data-mi="${i}" ${mo.on ? 'checked' : ''}> ${S.MONTHS[mo.m]} ${mo.y}</label></td>
+        <td class="muted">${esc(mo.sheet)}</td><td>${kept.length}</td><td><b>${fmt(kept.reduce((s, e) => s + e.amount, 0))}</b></td>
+        <td>${ex ? `<span class="up">already ${fmt(ex)} in app</span>` : '<span class="muted">—</span>'}</td></tr>`;
+    }).join('');
+    const on = p.months.filter((mo) => mo.on);
+    const count = on.reduce((s, mo) => s + mo.entries.filter((e) => p.map.get(e.h) !== '__skip').length, 0);
+    $('#xlsxBody').innerHTML = `
+      <p class="muted small">Found <b>${p.months.length}</b> month sheets${p.skipped.length ? ` · skipped: ${p.skipped.map(esc).join(', ')}` : ''}. Each amount becomes one expense dated the <b>1st of its month</b>; negative amounts are saved as refunds.</p>
+      <h4>1 · Match your columns to buckets</h4>
+      <div class="table-wrap"><table class="tbl"><thead><tr><th>Excel column</th><th>Rows</th><th>Total</th><th>Bucket</th></tr></thead><tbody>${mapRows}</tbody></table></div>
+      <h4>2 · Check the month totals against your sheet</h4>
+      <div class="table-wrap scroll-y"><table class="tbl"><thead><tr><th>Month</th><th>Sheet</th><th>Rows</th><th>Total</th><th></th></tr></thead><tbody>${monthRows}</tbody></table></div>
+      <p class="small"><b>${count}</b> expenses from <b>${on.length}</b> months will be imported.</p>`;
+    $('#xlsxImport').textContent = `Import ${count} expenses`;
+    $('#xlsxImport').disabled = !count;
+  }
+
+  $('#xlsxFile').addEventListener('change', async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    e.target.value = '';
+    try {
+      toast('Reading your workbook…');
+      await loadScript(XLSX_URL);
+      const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellFormula: true });
+      const parsed = parseWorkbook(wb);
+      if (!parsed.months.length) return toast('No month sheets found (expected names like “Aug 26”).');
+      const map = new Map();
+      for (const h of parsed.headers.keys()) {
+        const b = SKIP_HEADER.test(h) ? null : guessBucket(h);
+        map.set(h, SKIP_HEADER.test(h) ? '__skip' : b ? b.id : '__new');
+      }
+      parsed.months.forEach((mo) => { mo.on = !state.expenses.some((x) => x.date.startsWith(mo.key)); });
+      xlsxPlan = { ...parsed, map };
+      $('#xlsxError').hidden = true;
+      renderXlsxPlan();
+      $('#xlsxDialog').showModal();
+    } catch (err) { toast(err.message || 'Could not read that file'); }
+  });
+  $('#xlsxBody').addEventListener('change', (e) => {
+    if (e.target.dataset.h !== undefined) xlsxPlan.map.set(e.target.dataset.h, /^\d+$/.test(e.target.value) ? Number(e.target.value) : e.target.value);
+    if (e.target.dataset.mi !== undefined) xlsxPlan.months[Number(e.target.dataset.mi)].on = e.target.checked;
+    renderXlsxPlan();
+  });
+  $('#xlsxCancel').addEventListener('click', () => $('#xlsxDialog').close());
+  $('#xlsxImport').addEventListener('click', async () => {
+    const p = xlsxPlan;
+    const rows = [];
+    for (const mo of p.months.filter((x) => x.on)) {
+      for (const en of mo.entries) {
+        const target = p.map.get(en.h);
+        if (target === '__skip') continue;
+        const bucket = target === '__new' ? en.h : bucketById(target)?.name;
+        if (!bucket) continue;
+        // keep the original column name as the note when it was merged into a differently named bucket
+        const note = bucket.toLowerCase() === en.h.toLowerCase() ? '' : en.h;
+        rows.push({ date: `${mo.key}-01`, bucket, amount: en.amount, note });
+      }
+    }
+    const btn = $('#xlsxImport');
+    btn.disabled = true;
+    try {
+      let added = 0;
+      for (let i = 0; i < rows.length; i += 4000) {
+        btn.textContent = `Importing… ${Math.round((i / rows.length) * 100)}%`;
+        added += (await api('POST', '/api/expenses/import', { rows: rows.slice(i, i + 4000) })).added;
+      }
+      $('#xlsxDialog').close();
+      state.periodKey = 'all'; store.set('periodKey', 'all');
+      await load();
+      state.periodKey = 'all';
+      switchTab('reports');
+      toast(`Imported ${added} expenses 🎉`);
+    } catch (err) {
+      $('#xlsxError').textContent = `${err.message} — nothing after this point was saved; check History before retrying.`;
+      $('#xlsxError').hidden = false;
+      btn.disabled = false; btn.textContent = 'Retry import';
+    }
+  });
   $('#showArchived').addEventListener('change', (e) => { state.showArchived = e.target.checked; renderSettings(); });
 
   $('#bucketEdit').addEventListener('change', async (e) => {
@@ -679,7 +966,7 @@
     const idx = (n) => head.indexOf(n);
     const hasHead = idx('date') >= 0;
     const [di, bi, ai, ni] = hasHead ? [idx('date'), idx('bucket') >= 0 ? idx('bucket') : idx('category'), idx('amount'), idx('note')] : [0, 1, 2, 3];
-    const data = (hasHead ? rows.slice(1) : rows).map((r) => ({ date: (r[di] || '').trim(), bucket: r[bi], amount: Math.abs(Number(String(r[ai]).replace(/[^\d.-]/g, ''))), note: ni >= 0 ? r[ni] : '' }));
+    const data = (hasHead ? rows.slice(1) : rows).map((r) => ({ date: (r[di] || '').trim(), bucket: r[bi], amount: Number(String(r[ai]).replace(/[^\d.-]/g, '')), note: ni >= 0 ? r[ni] : '' }));
     try {
       const r = await api('POST', '/api/expenses/import', { rows: data });
       toast(`Imported ${r.added} expenses${r.skipped ? `, skipped ${r.skipped}` : ''}`);

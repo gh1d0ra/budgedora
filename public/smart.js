@@ -370,9 +370,10 @@
 
     // unusual single expense: far above that bucket's typical ticket
     const unusual = cur.map((e) => {
-      const hist = ctx.expenses.filter((x) => x.bucketId === e.bucketId && x.id !== e.id).map((x) => x.amount).sort((a, b) => a - b);
+      const hist = ctx.expenses.filter((x) => x.bucketId === e.bucketId && x.id !== e.id && x.amount > 0).map((x) => x.amount).sort((a, b) => a - b);
       if (hist.length < 5) return null;
       const median = hist[Math.floor(hist.length / 2)];
+      if (median < 5) return null; // tiny typical amounts make every ratio look huge
       return e.amount >= 3 * median && e.amount - median > 50 ? { e, ratio: e.amount / median } : null;
     }).filter(Boolean).sort((a, b) => b.ratio - a.ratio)[0];
     if (unusual) {
@@ -390,7 +391,8 @@
     // weekend vs weekday
     const wkd = cur.filter((e) => [0, 6].includes(parseYmd(e.date).getDay()));
     const days = daysBetween(period.from, period.to < ymd(today) ? period.to : ymd(today));
-    if (days >= 28 && cur.length >= 10) {
+    const monthLevel = cur.filter((e) => e.date.endsWith("-01")).length > cur.length * 0.5; // imported monthly sheets have no real days
+    if (days >= 28 && cur.length >= 10 && !monthLevel) {
       const share = sum(wkd) / total;
       if (share > 0.4) out.push({ icon: '🗓️', html: `${Math.round(share * 100)}% of your spending happens on weekends.` });
     }
@@ -455,15 +457,26 @@
   }
 
   /** Safe arithmetic for the amount field: "12.50+3.25*2" → 19 */
+  // Tiny recursive-descent parser (no eval, so the CSP can forbid it). Negative results = refunds.
   function evalAmount(str) {
-    const s = String(str).replace(/,/g, '.').replace(/[^\d.+\-*/() ]/g, '');
-    if (!s.trim()) return null;
-    if (/^\d*\.?\d+$/.test(s.trim()) || /^\d+\.$/.test(s.trim())) return Number(s);
-    if (!/^[\d.+\-*/() ]+$/.test(s)) return null;
+    const toks = String(str).replace(/,/g, '.').replace(/[^\d.+\-*/()]/g, '').match(/\d*\.?\d+|\d+\.|[+\-*/()]/g);
+    if (!toks) return null;
+    let i = 0;
+    const peek = () => toks[i];
+    const expr = () => { let v = term(); while (peek() === '+' || peek() === '-') { const op = toks[i++]; const r = term(); v = op === '+' ? v + r : v - r; } return v; };
+    const term = () => { let v = factor(); while (peek() === '*' || peek() === '/') { const op = toks[i++]; const r = factor(); v = op === '*' ? v * r : v / r; } return v; };
+    const factor = () => {
+      const t = toks[i++];
+      if (t === '-') return -factor();
+      if (t === '+') return factor();
+      if (t === '(') { const v = expr(); if (toks[i++] !== ')') throw 0; return v; }
+      if (t !== undefined && /^[\d.]+$/.test(t)) return Number(t);
+      throw 0;
+    };
     try {
-      // tokens are digits/operators only (validated above)
-      const v = Function('"use strict";return (' + s + ')')();
-      return Number.isFinite(v) ? Math.round(v * 100) / 100 : null;
+      const v = expr();
+      if (i !== toks.length || !Number.isFinite(v)) return null;
+      return Math.round(v * 100) / 100;
     } catch { return null; }
   }
 

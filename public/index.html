@@ -26,6 +26,18 @@
         <label class="field"><span>Password</span><input name="password" type="password" required minlength="6" autocomplete="current-password" placeholder="At least 6 characters"></label>
         <p id="authError" class="error" hidden></p>
         <button class="btn primary block" type="submit" id="authSubmit">Sign in</button>
+        <p class="forgot login-only"><button type="button" class="link" id="forgotBtn">Forgot password?</button></p>
+        <p class="muted small" id="forgotInfo" hidden>Ask the family admin to create a password-reset link for you in Budgedora (Buckets → Family accounts). The link works once, for 24 hours.</p>
+      </form>
+
+      <form id="resetForm" hidden autocomplete="on">
+        <h3>Choose a new password</h3>
+        <p class="muted small">This link works once. You'll be signed out on other devices.</p>
+        <label class="field"><span>New password</span><input name="password" type="password" required minlength="6" autocomplete="new-password"></label>
+        <label class="field"><span>Repeat new password</span><input name="password2" type="password" required minlength="6" autocomplete="new-password"></label>
+        <p id="resetError" class="error" hidden></p>
+        <button class="btn primary block" type="submit">Save new password</button>
+        <p class="forgot"><button type="button" class="link" id="resetCancel">Back to sign in</button></p>
       </form>
     </div>
   </section>
@@ -51,7 +63,7 @@
             <span class="cur" id="curSymbol">$</span>
             <input id="amount" inputmode="decimal" placeholder="0.00" aria-label="Amount" enterkeyhint="done">
           </div>
-          <div class="amount-hint" id="amountHint">&nbsp;</div>
+          <div class="amount-hint"><span id="amountHint">&nbsp;</span> <button type="button" class="chip refund-chip" id="refundBtn" aria-pressed="false">↩ Refund</button></div>
           <div id="smartSuggest" class="smart-suggest" hidden></div>
 
           <div class="bucket-grid" id="bucketGrid" role="radiogroup" aria-label="Bucket"></div>
@@ -165,11 +177,30 @@
         <div class="card">
           <h3>Data</h3>
           <div class="row wrap gap">
-            <a class="btn" href="/api/export.csv">⬇ Export CSV</a>
+            <label class="btn">📊 Import Excel budget<input type="file" id="xlsxFile" accept=".xlsx,.xlsm,.xls" hidden></label>
             <label class="btn">⬆ Import CSV<input type="file" id="importFile" accept=".csv,text/csv" hidden></label>
-            <button class="btn danger" id="logoutBtn" type="button">Sign out</button>
+            <a class="btn" href="/api/export.csv">⬇ Export CSV</a>
+            <button class="btn" id="logoutBtn" type="button">Sign out</button>
           </div>
-          <p class="muted small">CSV columns: <code>date,bucket,amount,note</code> (date as YYYY-MM-DD). Unknown buckets are created automatically.</p>
+          <p class="muted small"><b>Excel:</b> one sheet per month (named like “Aug 26”, “Sept 25”), one column per category, one amount per row; negative numbers are refunds. Summary sheets are skipped. Your file is read in your browser — you'll review everything before it's saved.<br>
+          <b>CSV:</b> columns <code>date,bucket,amount,note</code> (date as YYYY-MM-DD). Unknown buckets are created automatically.</p>
+        </div>
+
+        <div class="card" id="adminCard" hidden>
+          <div class="card-head"><h3>👑 Family accounts</h3><button class="link" id="adminRefresh" type="button">Refresh</button></div>
+          <p class="muted small">You're the family admin. Create one-time password-reset links (valid 24 h), unlock locked accounts, or restore deleted ones. You can't see anyone's expenses.</p>
+          <div class="table-wrap"><table class="tbl admin-tbl" id="adminTable"></table></div>
+          <div id="resetLinkBox" class="reset-link" hidden></div>
+          <div class="row gap wrap backup-row">
+            <button class="btn" id="backupNow" type="button">💾 Back up now</button>
+            <span class="muted small" id="backupStatus">Automatic: a cloud snapshot every day (kept 35 days, plus the 1st of each month forever).</span>
+          </div>
+        </div>
+
+        <div class="card danger-zone">
+          <h3>Delete account</h3>
+          <p class="muted small">Your account will be hidden and you'll be signed out. Nothing is erased — the family admin can restore it later with all your data.</p>
+          <button class="btn danger" id="deleteAccountBtn" type="button">Delete my account…</button>
         </div>
       </section>
     </main>
@@ -190,6 +221,43 @@
         <button class="btn primary" value="save" type="submit">Save</button>
       </div>
     </form>
+  </dialog>
+
+  <!-- Delete account: 3 deliberate steps -->
+  <dialog id="deleteDialog">
+    <form id="deleteForm" class="edit-form" novalidate>
+      <div data-step="1">
+        <h3>Delete your account?</h3>
+        <p>You'll be signed out and won't be able to sign in. Your buckets and expenses are <b>kept</b>, so the family admin can restore the account later.</p>
+        <label class="toggle"><input type="checkbox" name="understand"> I understand</label>
+        <div class="row gap end"><button class="btn" type="button" data-cancel>Cancel</button><button class="btn danger" type="button" data-next>Continue</button></div>
+      </div>
+      <div data-step="2" hidden>
+        <h3>Confirm it's you</h3>
+        <label class="field"><span>Your password</span><input name="password" type="password" autocomplete="current-password"></label>
+        <label class="field"><span>Type <b>DELETE</b> to confirm</span><input name="confirm" autocomplete="off" autocapitalize="characters"></label>
+        <p class="error" id="deleteError" hidden></p>
+        <div class="row gap end"><button class="btn" type="button" data-cancel>Cancel</button><button class="btn danger" type="button" data-next>Continue</button></div>
+      </div>
+      <div data-step="3" hidden>
+        <h3>Last check</h3>
+        <p>Delete the account <b id="deleteEmail"></b> now?</p>
+        <div class="row gap end"><button class="btn primary" type="button" data-cancel>Keep my account</button><button class="btn danger" type="submit">Yes, delete it</button></div>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Excel import review -->
+  <dialog id="xlsxDialog" class="wide">
+    <div class="edit-form">
+      <h3>Import Excel budget</h3>
+      <div id="xlsxBody"></div>
+      <p class="error" id="xlsxError" hidden></p>
+      <div class="row gap end">
+        <button class="btn" type="button" id="xlsxCancel">Cancel</button>
+        <button class="btn primary" type="button" id="xlsxImport">Import</button>
+      </div>
+    </div>
   </dialog>
 
   <div id="toast" class="toast" hidden></div>

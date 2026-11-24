@@ -1,6 +1,6 @@
 {
   "name": "budgedora",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Super simple multi-account expense tracker with buckets, smart questions and reports.",
   "type": "module",
   "private": true,
