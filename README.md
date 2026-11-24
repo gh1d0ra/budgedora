@@ -34,7 +34,7 @@ Education, Giving, Health/Beauty, Clothes, Entertainment, Vacation. Rename, reco
 
 ## Run it
 
-Requires **Node.js 22.13+** (uses the built-in `node:sqlite`). No `npm install` needed — zero dependencies.
+Requires **Node.js 22.13+** (built-in `node:sqlite`) for local runs — no `npm install` needed.
 
 ```bash
 npm start            # http://localhost:3000
@@ -43,16 +43,30 @@ npm run seed         # optional: demo account demo@budgedora.test / demo1234 wit
 
 Environment variables: `PORT` (default 3000), `DATA_DIR` (default `./data`, where `budgedora.db` lives).
 
-Put it behind HTTPS (e.g. Caddy/nginx, or any Node host) when exposing it to the internet; the session cookie
-is marked `Secure` automatically when `X-Forwarded-Proto: https` is set.
+## Production: Cloudflare Workers + D1
+
+Live at **https://budgedora.igorrash.workers.dev** (free tier is plenty for a family).
+
+```bash
+npm i -g wrangler && wrangler login      # once
+wrangler d1 create budgedora             # once — put the id in wrangler.toml
+npm run cf:db:init                       # once — creates the tables (safe to re-run)
+npm run deploy                           # every update
+```
+
+Back up the live data any time: `wrangler d1 export budgedora --remote --output backup.sql`.
 
 ## Structure
 
 ```
-server.js            HTTP server + JSON API + SQLite schema
+src/api.js           the JSON API (shared by Workers and Node)
+src/worker.js        Cloudflare Worker entry (D1 + static assets)
+src/schema.sql       database schema
+server.js            local Node server (node:sqlite)
+wrangler.toml        Cloudflare config
 public/index.html    the single-page app
 public/app.js        UI (entry, history, reports, settings)
 public/smart.js      periods, natural-language questions, insights, suggestions
 public/app.css       styles (light + dark)
-scripts/seed-demo.js demo data
+scripts/seed-demo.js local demo data
 ```
