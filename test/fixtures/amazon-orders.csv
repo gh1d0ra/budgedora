@@ -1,0 +1,5 @@
+"Website","Order ID","Order Date","Currency","Unit Price","Unit Price Tax","Total Owed","Quantity","Order Status","Ship Date","Product Name"
+"Amazon.com","111-1111111-1111111","2026-11-10T18:22:31Z","USD","22.40","1.59","23.99","1","Closed","2026-11-11T10:00:00Z","Anker USB C Cable, 6ft, Braided (2 Pack)"
+"Amazon.com","222-2222222-2222222","2026-11-01T08:00:00Z","USD","140.00","10.00","150.00","1","Closed","2026-11-02T10:00:00Z","Ninja Air Fryer Pro 4-in-1, 5 QT"
+"Amazon.com","222-2222222-2222222","2026-11-01T08:00:00Z","USD","18.69","1.31","20.00","1","Closed","2026-11-02T10:00:00Z","Vitamin D3 Gummies"
+"Amazon.com","333-3333333-3333333","2026-11-03T08:00:00Z","USD","9.99","0.70","10.69","1","Cancelled","","Cancelled Thing"

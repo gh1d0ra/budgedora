@@ -1,6 +1,31 @@
 # 🐉 Budgedora
 
+[![CI](https://github.com/gh1d0ra/budgedora/actions/workflows/ci.yml/badge.svg)](https://github.com/gh1d0ra/budgedora/actions/workflows/ci.yml)
+![TypeScript](https://img.shields.io/badge/server-TypeScript-3178c6)
+![Cloudflare Workers](https://img.shields.io/badge/runs%20on-Cloudflare%20Workers%20%2B%20D1-f38020)
+
 A super simple, multi-account expense tracker. Type an amount, tap a bucket, done.
+**Live:** https://budgedora.igorrash.workers.dev
+
+| Add | Import a statement | Ask a question | Reports |
+|---|---|---|---|
+| ![Add an expense](docs/screenshots/add.png) | ![Statement import review](docs/screenshots/import.png) | ![Plain-English question](docs/screenshots/ask.png) | ![Reports](docs/screenshots/reports.png) |
+
+## How it's built
+
+- **Serverless:** a TypeScript API on **Cloudflare Workers**, with **D1** (SQLite) for data, **KV** for backups and a **cron trigger** for daily snapshots.
+- **One API, two runtimes:** the API is a pure `(Request, Db) → Response` function. It runs on Workers in production and on Node's
+  built-in `node:sqlite` locally and in tests, through a four-method DB adapter.
+- **Private statement import:** bank PDFs, CSVs and Amazon order history are parsed **in the browser** (self-hosted pdf.js).
+  Only the rows you approve reach the server.
+- **Security:** PBKDF2 passwords, lockout and per-IP throttling, HttpOnly sessions, a JSON-only CSRF guard, and a strict CSP with no `eval`.
+- **Tested and shipped by CI:**
+  - 57 unit and API tests (`node:test`) and Playwright browser tests on desktop and phone sizes;
+  - GitHub Actions runs the type check, tests and a Worker build on every push, then deploys `main`.
+- **No front-end framework:** vanilla JS with no build step. Server-side TypeScript runs directly on Node 22.18+ by stripping the types.
+
+Read more: [architecture overview](docs/architecture.md) (diagrams, data model, request flow) and
+[design decisions](docs/decisions/).
 
 Inspired by the best parts of YNAB / Goodbudget (envelope-style **buckets** with optional monthly budgets),
 Monarch / Copilot (clean reports, month-to-date pace) — minus the bank syncing and complexity.
@@ -80,7 +105,33 @@ npm run seed         # optional: demo account demo@budgedora.test / demo1234 wit
 ```
 
 The server side (`server.ts`, `src/*.ts`, `scripts/*.ts`) is **TypeScript**; the browser code in `public/` is plain JavaScript.
-To type-check after changes: `npm install` once (dev tools only), then `npm run check`.
+
+## Tests
+
+```bash
+npm install            # once: dev tools only (TypeScript, Playwright)
+npm run check          # type-check the Node side and the Worker side
+npm test               # unit + API tests (node:test, in-memory SQLite) — a few seconds
+npx playwright install chromium   # once
+npm run test:e2e       # browser tests: desktop + phone, against a throw-away local server
+```
+
+| Suite | What it covers |
+|---|---|
+| `test/statements.test.ts` | AMEX / Chase / Wells Fargo CSV, OFX and PDF parsing, year rollover, totals check, skip rules, bucket guesses, duplicates, Amazon matching |
+| `test/smart.test.ts` | plain-English questions, periods, the amount calculator, suggestions, recurring charges |
+| `test/api.test.ts` | sign-up and sessions, lockout and IP throttling, CSRF guard, isolation between accounts, CRUD, import and export, admin reset and restore, snapshots |
+| `e2e/app.spec.ts` | sign up → add an expense → import an AMEX statement → ask a question, in Chromium (desktop and Pixel 7) |
+
+All fixtures are made up; no real statements are stored in the repo.
+
+**CI/CD:** [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every push and pull request:
+- the type check and unit tests on Node 22 and 24;
+- a Worker bundle check;
+- the Playwright tests.
+
+On `main` it then deploys to Cloudflare with `wrangler`. That step needs the `CLOUDFLARE_API_TOKEN` and
+`CLOUDFLARE_ACCOUNT_ID` repository secrets, and is skipped with a notice until they're added.
 
 Environment variables: `PORT` (default 3000), `DATA_DIR` (default `./data`, where `budgedora.db` lives).
 
@@ -110,11 +161,16 @@ Upgrading an older database: run each new file in `src/migrations/` once with `w
 ```
 src/api.ts           the JSON API (shared by Workers and Node) and its types
 src/worker.ts        Cloudflare Worker entry (D1 + static assets)
+src/sqlite-db.ts     node:sqlite version of the DB adapter (local server + tests)
 src/schema.sql       database schema (fresh installs)
 src/migrations/      schema changes for existing databases
 server.ts            local Node server (node:sqlite)
 wrangler.toml        Cloudflare config
 tsconfig*.json       type checking (Node side, Worker side)
+test/                unit + API tests and made-up fixtures
+e2e/                 Playwright browser tests (playwright.config.ts)
+docs/                architecture, decision records, screenshots
+.github/             CI/CD workflow and Dependabot
 public/index.html    the single-page app
 public/app.js        UI (entry, history, reports, settings)
 public/smart.js      periods, natural-language questions, insights, suggestions

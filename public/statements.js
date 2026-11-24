@@ -80,6 +80,7 @@
       .replace(/\s+[SP]\d{8,}\s+CARD\s+\d{4}\s*$/i, '')
       .replace(/\s+CARD\s+\d{4}\s*$/i, '')
       .replace(/^(AplPay|APLPAY|GglPay|GOOGLE PAY)\s+/i, '')
+      .replace(/\s+\d\d\/\d\d\s*$/, '') // Chase checking CSV: card date at the end ("… RALEIGH NC     10/29")
       .replace(/\s{2,}[A-Z]{2}\s*$/, '') // trailing state code after a gap ("RALEIGH        NC")
       .replace(/\b\d{3}-\d{3}-\d{4}\b/g, '') // phone numbers
       // ACH codes: YYMMDD dates, masked accounts, long reference numbers ("261011", "xxxxx5035", "790252001Epayi")
@@ -190,6 +191,9 @@
       const bankish = txns.some((t) => /PURCHASE AUTHORIZED ON|RECURRING PAYMENT AUTHORIZED|DIRECT DEP|ATM WITHDRAWAL|ONLINE TRANSFER|CHECK #|^CHECK\b|MOBILE DEPOSIT/i.test(t.raw));
       return { source: 'Wells Fargo', kind: bankish ? 'bank' : 'card', txns };
     }
+
+    const first = (rows[0] || []).map(norm);
+    if (first.includes('bucket') && first.includes('date') && first.includes('amount')) throw new Error('This looks like a Budgedora CSV — use “Import CSV” for it.');
 
     // find the header row (some exports, e.g. AMEX Excel, start with a few summary lines)
     let hr = -1;

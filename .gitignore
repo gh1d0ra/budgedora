@@ -5,3 +5,7 @@ data/
 .env
 .wrangler/
 demo.sql
+
+# Playwright
+test-results/
+playwright-report/

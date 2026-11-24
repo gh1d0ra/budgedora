@@ -330,6 +330,21 @@ dialog.wide { width: min(760px, calc(100vw - 32px)); }
 .stmt-tbl select { padding: 5px 6px; max-width: 200px; }
 .stmt-tbl select.need { border-color: var(--danger); }
 .stmt-tbl .badge { font-size: 10.5px; padding: 1px 6px; margin-left: 4px; }
+/* Phones: each row becomes a small card (description + amount, date under it, bucket picker full width). */
+@media (max-width: 600px) {
+  .stmt-tbl thead { display: none; }
+  .stmt-tbl, .stmt-tbl tbody { display: block; }
+  .stmt-tbl tr { display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; grid-template-areas: "chk desc amt" "chk date amt" ". bucket bucket";
+    gap: 2px 10px; padding: 10px 0; border-bottom: 1px solid var(--border); align-items: start; }
+  .stmt-tbl tr:has(td[colspan]) { display: block; }
+  .stmt-tbl td { padding: 0; border: 0; text-align: left; }
+  .stmt-tbl td:nth-child(1) { grid-area: chk; padding-top: 2px; }
+  .stmt-tbl td:nth-child(2) { grid-area: date; font-size: 12.5px; color: var(--muted); }
+  .stmt-tbl td:nth-child(3) { grid-area: desc; min-width: 0; }
+  .stmt-tbl td:nth-child(4) { grid-area: amt; text-align: right; white-space: nowrap; font-weight: 650; }
+  .stmt-tbl td:nth-child(5) { grid-area: bucket; margin-top: 6px; }
+  .stmt-tbl td:nth-child(5) select { width: 100%; max-width: none; }
+}
 #deleteDialog p { line-height: 1.5; }
 .backup-row { margin-top: 14px; align-items: center; }
 

@@ -4,11 +4,11 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DatabaseSync } from 'node:sqlite';
 import zlib from 'node:zlib';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { handleApi, snapshot, SECURITY_HEADERS } from './src/api.ts';
-import type { Db, BackupResult } from './src/api.ts';
+import type { BackupResult } from './src/api.ts';
+import { openSqlite } from './src/sqlite-db.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 3000;
@@ -16,31 +16,9 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
-const sqlite = new DatabaseSync(path.join(DATA_DIR, 'budgedora.db'));
-sqlite.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
-sqlite.exec(fs.readFileSync(path.join(__dirname, 'src', 'schema.sql'), 'utf8'));
-// Apply migrations to older local databases (each statement is safe to retry).
-for (const f of fs.readdirSync(path.join(__dirname, 'src', 'migrations')).sort()) {
-  for (const stmt of fs.readFileSync(path.join(__dirname, 'src', 'migrations', f), 'utf8').replace(/--.*$/gm, '').split(';')) {
-    if (!stmt.trim()) continue;
-    try { sqlite.exec(stmt); } catch (e) { if (!/duplicate column/i.test((e as Error).message)) throw e; }
-  }
-}
+const { sqlite, db } = openSqlite(path.join(DATA_DIR, 'budgedora.db'));
+export { db };
 const ADMIN_EMAILS = process.env.ADMIN_EMAILS || '';
-
-export const db: Db = {
-  all: async (sql, ...p) => sqlite.prepare(sql).all(...p) as any[],
-  get: async (sql, ...p) => (sqlite.prepare(sql).get(...p) as any) ?? null,
-  run: async (sql, ...p) => {
-    const r = sqlite.prepare(sql).run(...p);
-    return { lastId: Number(r.lastInsertRowid), changes: Number(r.changes) };
-  },
-  batch: async (stmts) => {
-    sqlite.exec('BEGIN');
-    try { stmts.forEach(([sql, ...p]) => sqlite.prepare(sql).run(...p)); sqlite.exec('COMMIT'); }
-    catch (e) { sqlite.exec('ROLLBACK'); throw e; }
-  },
-};
 
 // Local equivalent of the Worker's KV snapshots: data/backups/manual-*.json.gz
 async function localBackup(): Promise<BackupResult> {
