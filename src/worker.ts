@@ -1,17 +1,25 @@
 // Cloudflare Worker entry: /api/* → shared API on D1, everything else → static assets in /public.
-import { handleApi, snapshot, SECURITY_HEADERS } from './api.js';
+import { handleApi, snapshot, SECURITY_HEADERS } from './api.ts';
+import type { Db, Stmt, BackupKind, BackupResult } from './api.ts';
 
-const d1 = (D1) => ({
-  all: async (sql, ...p) => (await D1.prepare(sql).bind(...p).all()).results,
-  get: async (sql, ...p) => (await D1.prepare(sql).bind(...p).first()) ?? null,
+interface Env {
+  DB: D1Database;
+  BACKUPS?: KVNamespace;
+  ASSETS: Fetcher;
+  ADMIN_EMAILS?: string;
+}
+
+const d1 = (D1: D1Database): Db => ({
+  all: async (sql, ...p) => (await D1.prepare(sql).bind(...p).all<any>()).results,
+  get: async (sql, ...p) => (await D1.prepare(sql).bind(...p).first<any>()) ?? null,
   run: async (sql, ...p) => {
     const r = await D1.prepare(sql).bind(...p).run();
     return { lastId: r.meta.last_row_id, changes: r.meta.changes };
   },
-  batch: async (stmts) => (stmts.length ? D1.batch(stmts.map(([sql, ...p]) => D1.prepare(sql).bind(...p))) : []),
+  batch: async (stmts: Stmt[]) => (stmts.length ? D1.batch(stmts.map(([sql, ...p]) => D1.prepare(sql).bind(...p))) : []),
 });
 
-async function gzip(text) {
+async function gzip(text: string): Promise<ArrayBuffer> {
   const stream = new Blob([text]).stream().pipeThrough(new CompressionStream('gzip'));
   return new Response(stream).arrayBuffer();
 }
@@ -22,13 +30,13 @@ async function gzip(text) {
  *   monthly/YYYY-MM.json.gz             kept forever (written on the 1st)
  *   manual/YYYY-MM-DDTHH-MM-SS.json.gz  kept 180 days ("Back up now")
  */
-async function backupToKv(env, kind) {
+async function backupToKv(env: Env, kind: BackupKind): Promise<BackupResult> {
   if (!env.BACKUPS) throw new Error('KV binding BACKUPS missing');
   const snap = await snapshot(d1(env.DB));
   const body = await gzip(JSON.stringify(snap));
   const meta = { metadata: { users: snap.users.length, expenses: snap.expenses.length, takenAt: snap.takenAt } };
   const day = snap.takenAt.slice(0, 10);
-  let key;
+  let key: string;
   if (kind === 'manual') {
     key = `manual/${snap.takenAt.slice(0, 19).replace(/:/g, '-')}.json.gz`;
     await env.BACKUPS.put(key, body, { ...meta, expirationTtl: 180 * 86400 });
@@ -64,4 +72,4 @@ export default {
     ]);
     await backupToKv(env, 'daily');
   },
-};
+} satisfies ExportedHandler<Env>;

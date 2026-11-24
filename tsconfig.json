@@ -1,0 +1,19 @@
+{
+  // Type checking only (`npm run check`). Nothing is compiled: Node 22.18+ runs the .ts files
+  // directly by stripping types, and wrangler bundles src/worker.ts for Cloudflare.
+  // This config covers the Node side; tsconfig.worker.json covers the Worker.
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "strict": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
+    "skipLibCheck": true
+  },
+  "include": ["server.ts", "src/api.ts", "scripts/*.ts"]
+}

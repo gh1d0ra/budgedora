@@ -66,18 +66,21 @@ Restore from a snapshot (upserts; `--user` restores just one account):
 ```bash
 wrangler kv key list --binding BACKUPS --remote
 wrangler kv key get --binding BACKUPS "daily/2026-11-24.json.gz" --remote > snap.json.gz
-node scripts/snapshot-to-sql.js snap.json.gz restore.sql [--user someone@example.com]
+node scripts/snapshot-to-sql.ts snap.json.gz restore.sql [--user someone@example.com]
 wrangler d1 execute budgedora --remote --file=restore.sql
 ```
 
 ## Run it
 
-Requires **Node.js 22.13+** (built-in `node:sqlite`) for local runs — no `npm install` needed.
+Requires **Node.js 22.18+** for local runs: Node runs the TypeScript files directly and has SQLite built in, so no `npm install` or build step is needed to run it.
 
 ```bash
 npm start            # http://localhost:3000
 npm run seed         # optional: demo account demo@budgedora.test / demo1234 with 3 years of data
 ```
+
+The server side (`server.ts`, `src/*.ts`, `scripts/*.ts`) is **TypeScript**; the browser code in `public/` is plain JavaScript.
+To type-check after changes: `npm install` once (dev tools only), then `npm run check`.
 
 Environment variables: `PORT` (default 3000), `DATA_DIR` (default `./data`, where `budgedora.db` lives).
 
@@ -96,7 +99,7 @@ npm run deploy                           # every update
 Add a demo account with ~3 years of made-up expenses to the live site (re-running resets it):
 
 ```bash
-node scripts/demo-sql.js someone@example.com theirpassword "Name" demo.sql
+node scripts/demo-sql.ts someone@example.com theirpassword "Name" demo.sql
 wrangler d1 execute budgedora --remote --file=demo.sql
 ```
 
@@ -105,18 +108,20 @@ Upgrading an older database: run each new file in `src/migrations/` once with `w
 ## Structure
 
 ```
-src/api.js           the JSON API (shared by Workers and Node)
-src/worker.js        Cloudflare Worker entry (D1 + static assets)
+src/api.ts           the JSON API (shared by Workers and Node) and its types
+src/worker.ts        Cloudflare Worker entry (D1 + static assets)
 src/schema.sql       database schema (fresh installs)
 src/migrations/      schema changes for existing databases
-server.js            local Node server (node:sqlite)
+server.ts            local Node server (node:sqlite)
 wrangler.toml        Cloudflare config
+tsconfig*.json       type checking (Node side, Worker side)
 public/index.html    the single-page app
 public/app.js        UI (entry, history, reports, settings)
 public/smart.js      periods, natural-language questions, insights, suggestions
+public/statements.js bank / card statement and Amazon order parsing
 public/app.css       styles (light + dark)
-scripts/seed-demo.js local demo data
-scripts/demo-sql.js  demo account for the live database
+scripts/seed-demo.ts local demo data
+scripts/demo-sql.ts  demo account for the live database
 scripts/backup-*.ps1 weekly local backup + task installer
-scripts/snapshot-to-sql.js  restore a KV snapshot
+scripts/snapshot-to-sql.ts  restore a KV snapshot
 ```

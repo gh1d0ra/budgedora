@@ -3,7 +3,44 @@
 //   db.all(sql, ...params) → rows    db.get(sql, ...params) → row | null
 //   db.run(sql, ...params) → { lastId, changes }    db.batch([[sql, ...params], ...])
 
-export const DEFAULT_BUCKETS = [
+// ---------- types ----------
+export type Param = string | number | null;
+export type Stmt = [sql: string, ...params: Param[]];
+export interface Db {
+  all<T = any>(sql: string, ...params: Param[]): Promise<T[]>;
+  get<T = any>(sql: string, ...params: Param[]): Promise<T | null>;
+  run(sql: string, ...params: Param[]): Promise<{ lastId: number; changes: number }>;
+  batch(stmts: Stmt[]): Promise<unknown>;
+}
+
+export interface UserRow {
+  id: number; email: string; name: string; currency: string; pass_hash: string; created_at: string;
+  failed_logins: number; locked_until: number | null; deleted_at: string | null;
+}
+export interface BucketRow {
+  id: number; user_id: number; name: string; icon: string; color: string;
+  monthly_budget: number | null; sort: number; archived: number;
+}
+export interface ExpenseRow { id: number; user_id: number; bucket_id: number; amount: number; date: string; note: string }
+export interface BudgetRow { user_id: number; bucket_id: number; month: string; amount: number }
+
+export interface User { id: number; email: string; name: string; currency: string; isAdmin: boolean }
+export type BackupKind = 'manual' | 'daily';
+export interface BackupResult { key: string; users: number; expenses: number; bytes: number; takenAt: string }
+export interface ApiOptions {
+  ip?: string;
+  /** Comma-separated admin emails. */
+  admins?: string;
+  backup?: ((kind: BackupKind) => Promise<BackupResult>) | null;
+}
+export interface Snapshot {
+  version: number; takenAt: string;
+  users: UserRow[]; buckets: BucketRow[]; expenses: ExpenseRow[]; budgets: BudgetRow[];
+}
+/** A parsed JSON request body: untrusted, so every field is checked before use. */
+type Body = Record<string, any>;
+
+export const DEFAULT_BUCKETS: [name: string, icon: string, color: string][] = [
   ['Groceries', '🛒', '#16a34a'],
   ['Restaurants', '🍽️', '#ea580c'],
   ['Household', '🏡', '#65a30d'],
@@ -28,7 +65,7 @@ const LOCK_BASE_MS = 15 * 60e3;       // first lock: 15 minutes, doubling after 
 const LOCK_MAX_MS = 24 * 3600e3;      // never longer than 24 hours
 
 /** Security headers for every response (pages, files and API). */
-export const SECURITY_HEADERS = {
+export const SECURITY_HEADERS: Record<string, string> = {
   'Content-Security-Policy': [
     "default-src 'self'",
     "script-src 'self' https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/ https://cdn.sheetjs.com/xlsx-0.20.3/",
@@ -53,19 +90,19 @@ export const SECURITY_HEADERS = {
 
 // ---------- crypto ----------
 const enc = new TextEncoder();
-const toHex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
-const fromHex = (hex) => new Uint8Array(hex.match(/../g).map((h) => parseInt(h, 16)));
-const sha256 = async (s) => toHex(await crypto.subtle.digest('SHA-256', enc.encode(s)));
+const toHex = (buf: ArrayBuffer | Uint8Array): string => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+const fromHex = (hex: string): Uint8Array => new Uint8Array((hex.match(/../g) ?? []).map((h) => parseInt(h, 16)));
+const sha256 = async (s: string): Promise<string> => toHex(await crypto.subtle.digest('SHA-256', enc.encode(s)));
 
-async function pbkdf2(password, salt, iter) {
+async function pbkdf2(password: string, salt: Uint8Array, iter: number): Promise<ArrayBuffer> {
   const key = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']);
   return crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: iter }, key, 256);
 }
-export async function hashPassword(pw) {
+export async function hashPassword(pw: string): Promise<string> {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   return `pbkdf2$${PBKDF2_ITER}$${toHex(salt)}$${toHex(await pbkdf2(pw, salt, PBKDF2_ITER))}`;
 }
-async function verifyPassword(pw, stored) {
+async function verifyPassword(pw: string, stored: string): Promise<boolean> {
   const [kind, iter, saltHex, hashHex] = String(stored).split('$');
   if (kind !== 'pbkdf2') return false;
   const got = new Uint8Array(await pbkdf2(pw, fromHex(saltHex), Number(iter)));
@@ -77,10 +114,10 @@ async function verifyPassword(pw, stored) {
 }
 // Run a hash even for unknown emails so response time doesn't reveal which accounts exist.
 const DUMMY_HASH = 'pbkdf2$100000$00000000000000000000000000000000$' + '0'.repeat(64);
-export const randomToken = () => toHex(crypto.getRandomValues(new Uint8Array(32)));
+export const randomToken = (): string => toHex(crypto.getRandomValues(new Uint8Array(32)));
 
 /** Creates a one-time reset token for a user; returns the raw token (only its hash is stored). */
-export async function createResetToken(db, userId) {
+export async function createResetToken(db: Db, userId: number): Promise<string> {
   const token = randomToken();
   await db.batch([
     ['DELETE FROM reset_tokens WHERE user_id = ? OR expires_at < ?', userId, Date.now()],
@@ -90,60 +127,65 @@ export async function createResetToken(db, userId) {
 }
 
 // ---------- helpers ----------
-const json = (status, body, headers = {}) =>
+const json = (status: number, body: unknown, headers: Record<string, string> = {}): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...headers } });
-const fail = (status, error, extra = {}) => json(status, { error, ...extra });
+const fail = (status: number, error: string, extra: Record<string, unknown> = {}): Response => json(status, { error, ...extra });
 
-class HttpError extends Error { constructor(status, msg) { super(msg); this.status = status; } }
+class HttpError extends Error {
+  status: number;
+  constructor(status: number, msg: string) { super(msg); this.status = status; }
+}
 
-async function readBody(req) {
+async function readBody(req: Request): Promise<Body> {
   const text = await req.text();
   if (text.length > 5e6) throw new HttpError(413, 'Body too large');
   if (!text) return {};
   try { return JSON.parse(text); } catch { throw new HttpError(400, 'Invalid JSON'); }
 }
 
-const parseCookies = (req) =>
+const parseCookies = (req: Request): Record<string, string | undefined> =>
   Object.fromEntries((req.headers.get('cookie') || '').split(';').filter((c) => c.includes('=')).map((c) => {
     const i = c.indexOf('=');
     return [c.slice(0, i).trim(), decodeURIComponent(c.slice(i + 1).trim())];
   }));
 
-function sessionCookie(token, maxAgeSec, req) {
+function sessionCookie(token: string, maxAgeSec: number, req: Request): string {
   const https = new URL(req.url).protocol === 'https:' || req.headers.get('x-forwarded-proto') === 'https';
   return `sid=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAgeSec}${https ? '; Secure' : ''}`;
 }
 
-const isDate = (s) => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(Date.parse(s));
-const toCents = (v) => {
+const isDate = (s: unknown): s is string => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(Date.parse(s));
+const toCents = (v: unknown): number | null => {
   const n = Math.round(Number(v) * 100);
   return Number.isFinite(n) && n !== 0 && Math.abs(n) < 1e12 ? n : null; // negative = refund/credit
 };
-const cleanStr = (s, max) => String(s ?? '').trim().slice(0, max);
-const isColor = (c) => /^#[0-9a-f]{6}$/i.test(String(c || ''));
-const minutes = (ms) => Math.max(1, Math.ceil(ms / 60e3));
-const checkNewPassword = (pw) => {
+const cleanStr = (s: unknown, max: number): string => String(s ?? '').trim().slice(0, max);
+const isColor = (c: unknown): c is string => /^#[0-9a-f]{6}$/i.test(String(c || ''));
+const minutes = (ms: number): number => Math.max(1, Math.ceil(ms / 60e3));
+const checkNewPassword = (pw: unknown): void => {
   if (String(pw || '').length < 6) throw new HttpError(400, 'Password must be at least 6 characters.');
   if (String(pw).length > 200) throw new HttpError(400, 'Password is too long.');
 };
+/** A positive monthly budget in cents, or null for "no budget". */
+const budgetCents = (v: unknown): number | null => { const c = toCents(v); return c && c > 0 ? c : null; };
 
-const bucketOut = (b) => ({
+const bucketOut = (b: BucketRow) => ({
   id: b.id, name: b.name, icon: b.icon, color: b.color, sort: b.sort, archived: !!b.archived,
   monthlyBudget: b.monthly_budget == null ? null : b.monthly_budget / 100,
 });
-const expenseOut = (e) => ({ id: e.id, bucketId: e.bucket_id, amount: e.amount / 100, date: e.date, note: e.note });
+const expenseOut = (e: ExpenseRow) => ({ id: e.id, bucketId: e.bucket_id, amount: e.amount / 100, date: e.date, note: e.note });
 
 // ---------- sessions & throttling ----------
-async function createSession(db, userId) {
+async function createSession(db: Db, userId: number): Promise<string> {
   const token = randomToken();
   await db.run('INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)', token, userId, Date.now() + SESSION_DAYS * 864e5);
   return token;
 }
 
-async function currentUser(db, req, admins) {
+async function currentUser(db: Db, req: Request, admins: Set<string>): Promise<User | null> {
   const token = parseCookies(req).sid;
   if (!token) return null;
-  const row = await db.get(`SELECT u.id, u.email, u.name, u.currency, s.expires_at
+  const row = await db.get<Pick<UserRow, 'id' | 'email' | 'name' | 'currency'> & { expires_at: number }>(`SELECT u.id, u.email, u.name, u.currency, s.expires_at
     FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ? AND u.deleted_at IS NULL`, token);
   if (!row) return null;
   if (row.expires_at < Date.now()) { await db.run('DELETE FROM sessions WHERE token = ?', token); return null; }
@@ -151,9 +193,9 @@ async function currentUser(db, req, admins) {
 }
 
 /** Per-IP limit across all accounts: 30 sign-in/sign-up/reset attempts per 15 minutes. */
-async function throttleIp(db, ip) {
+async function throttleIp(db: Db, ip: string): Promise<void> {
   const since = Date.now() - 15 * 60e3;
-  const { n } = await db.get('SELECT COUNT(*) AS n FROM login_attempts WHERE ip = ? AND at > ?', ip, since);
+  const { n } = await one<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM login_attempts WHERE ip = ? AND at > ?', ip, since);
   if (n >= 30) throw new HttpError(429, 'Too many attempts from this network. Try again in a few minutes.');
   await db.batch([
     ['INSERT INTO login_attempts (ip, at) VALUES (?, ?)', ip, Date.now()],
@@ -161,15 +203,17 @@ async function throttleIp(db, ip) {
   ]);
 }
 
+/** For queries that always return a row (COUNT, MAX, or a row just inserted). */
+async function one<T>(db: Db, sql: string, ...params: Param[]): Promise<T> {
+  const row = await db.get<T>(sql, ...params);
+  if (!row) throw new Error(`Expected a row from: ${sql}`);
+  return row;
+}
+
 // ---------- API ----------
-/**
- * @param {Request} req
- * @param db  async DB adapter
- * @param {{ip?: string, admins?: string}} opts  admins: comma-separated admin emails
- */
-export async function handleApi(req, db, { ip = 'unknown', admins = '', backup = null } = {}) {
+export async function handleApi(req: Request, db: Db, { ip = 'unknown', admins = '', backup = null }: ApiOptions = {}): Promise<Response> {
   const adminSet = new Set(String(admins).split(',').map((s) => s.trim().toLowerCase()).filter(Boolean));
-  let res;
+  let res: Response;
   try {
     // Basic CSRF guard: state-changing requests must be JSON (forces a CORS preflight cross-site).
     if (req.method !== 'GET' && !String(req.headers.get('content-type') || '').includes('application/json')) {
@@ -185,7 +229,7 @@ export async function handleApi(req, db, { ip = 'unknown', admins = '', backup =
   return res;
 }
 
-async function route(req, db, ip, admins, backup) {
+async function route(req: Request, db: Db, ip: string, admins: Set<string>, backup: ApiOptions['backup']): Promise<Response> {
   const url = new URL(req.url);
   const { pathname } = url;
   const method = req.method;
@@ -197,7 +241,7 @@ async function route(req, db, ip, admins, backup) {
     const name = cleanStr(b.name, 80) || email.split('@')[0];
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return fail(400, 'Enter a valid email.');
     checkNewPassword(b.password);
-    const existing = await db.get('SELECT deleted_at FROM users WHERE email = ?', email);
+    const existing = await db.get<Pick<UserRow, 'deleted_at'>>('SELECT deleted_at FROM users WHERE email = ?', email);
     if (existing?.deleted_at) return fail(409, 'This email belongs to a deleted account. Ask the family admin to restore it.');
     if (existing) return fail(409, 'An account with that email already exists.');
     const { lastId: uid } = await db.run('INSERT INTO users (email, name, pass_hash) VALUES (?, ?, ?)', email, name, await hashPassword(String(b.password)));
@@ -209,7 +253,7 @@ async function route(req, db, ip, admins, backup) {
   if (pathname === '/api/login' && method === 'POST') {
     await throttleIp(db, ip);
     const b = await readBody(req);
-    const u = await db.get('SELECT id, pass_hash, failed_logins, locked_until, deleted_at FROM users WHERE email = ?', cleanStr(b.email, 200));
+    const u = await db.get<UserRow>('SELECT id, pass_hash, failed_logins, locked_until, deleted_at FROM users WHERE email = ?', cleanStr(b.email, 200));
     const now = Date.now();
     if (u?.locked_until && u.locked_until > now) {
       return fail(423, `Too many wrong passwords. This account is locked for ${minutes(u.locked_until - now)} more minute(s). The family admin can unlock it.`, { lockedUntil: u.locked_until });
@@ -241,7 +285,7 @@ async function route(req, db, ip, admins, backup) {
   if (pathname === '/api/reset' && method === 'POST') {
     await throttleIp(db, ip);
     const b = await readBody(req);
-    const row = await db.get('SELECT t.user_id, t.expires_at, t.used_at, u.email FROM reset_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ?',
+    const row = await db.get<{ user_id: number; expires_at: number; used_at: number | null; email: string }>('SELECT t.user_id, t.expires_at, t.used_at, u.email FROM reset_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ?',
       await sha256(String(b.token || '')));
     if (!row || row.used_at || row.expires_at < Date.now()) return fail(400, 'This reset link is invalid or has expired. Ask the family admin for a new one.');
     checkNewPassword(b.password);
@@ -266,10 +310,10 @@ async function route(req, db, ip, admins, backup) {
     const name = cleanStr(b.name, 80) || user.name;
     const currency = /^[A-Z]{3}$/.test(b.currency) ? b.currency : user.currency;
     if (b.newPassword) {
-      const row = await db.get('SELECT pass_hash FROM users WHERE id = ?', uid);
+      const row = await one<Pick<UserRow, 'pass_hash'>>(db, 'SELECT pass_hash FROM users WHERE id = ?', uid);
       if (!(await verifyPassword(String(b.currentPassword || ''), row.pass_hash))) return fail(400, 'Current password is wrong.');
       checkNewPassword(b.newPassword);
-      const current = parseCookies(req).sid;
+      const current = parseCookies(req).sid ?? '';
       await db.batch([
         ['UPDATE users SET pass_hash = ? WHERE id = ?', await hashPassword(String(b.newPassword)), uid],
         ['DELETE FROM sessions WHERE user_id = ? AND token <> ?', uid, current], // sign out other devices
@@ -283,7 +327,7 @@ async function route(req, db, ip, admins, backup) {
   if (pathname === '/api/account/delete' && method === 'POST') {
     const b = await readBody(req);
     if (b.confirm !== 'DELETE') return fail(400, 'Type DELETE to confirm.');
-    const row = await db.get('SELECT pass_hash FROM users WHERE id = ?', uid);
+    const row = await one<Pick<UserRow, 'pass_hash'>>(db, 'SELECT pass_hash FROM users WHERE id = ?', uid);
     if (!(await verifyPassword(String(b.password || ''), row.pass_hash))) return fail(400, 'Password is wrong.');
     await db.batch([
       ["UPDATE users SET deleted_at = datetime('now') WHERE id = ?", uid],
@@ -313,7 +357,7 @@ async function route(req, db, ip, admins, backup) {
     }
     const am = pathname.match(/^\/api\/admin\/users\/(\d+)\/(reset-link|restore|unlock)$/);
     if (am && method === 'POST') {
-      const target = await db.get('SELECT id, email, deleted_at FROM users WHERE id = ?', Number(am[1]));
+      const target = await db.get<Pick<UserRow, 'id' | 'email' | 'deleted_at'>>('SELECT id, email, deleted_at FROM users WHERE id = ?', Number(am[1]));
       if (!target) return fail(404, 'Account not found.');
       if (am[2] === 'reset-link') {
         const token = await createResetToken(db, target.id);
@@ -333,9 +377,9 @@ async function route(req, db, ip, admins, backup) {
 
   if (pathname === '/api/data' && method === 'GET') {
     const [buckets, expenses, budgets] = await Promise.all([
-      db.all('SELECT * FROM buckets WHERE user_id = ? ORDER BY sort, id', uid),
-      db.all('SELECT * FROM expenses WHERE user_id = ? ORDER BY date DESC, id DESC', uid),
-      db.all('SELECT bucket_id, month, amount FROM budgets WHERE user_id = ? ORDER BY month', uid),
+      db.all<BucketRow>('SELECT * FROM buckets WHERE user_id = ? ORDER BY sort, id', uid),
+      db.all<ExpenseRow>('SELECT * FROM expenses WHERE user_id = ? ORDER BY date DESC, id DESC', uid),
+      db.all<BudgetRow>('SELECT bucket_id, month, amount FROM budgets WHERE user_id = ? ORDER BY month', uid),
     ]);
     return json(200, {
       user, buckets: buckets.map(bucketOut), expenses: expenses.map(expenseOut),
@@ -349,8 +393,8 @@ async function route(req, db, ip, admins, backup) {
     const b = await readBody(req);
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(String(b.month))) return fail(400, 'Pick a month.');
     if (!Array.isArray(b.items) || !b.items.length) return fail(400, 'Nothing to save.');
-    const owned = new Set((await db.all('SELECT id FROM buckets WHERE user_id = ?', uid)).map((x) => x.id));
-    const stmts = [];
+    const owned = new Set((await db.all<{ id: number }>('SELECT id FROM buckets WHERE user_id = ?', uid)).map((x) => x.id));
+    const stmts: Stmt[] = [];
     for (const it of b.items.slice(0, 500)) {
       const bid = Number(it.bucketId);
       if (!owned.has(bid)) return fail(400, 'Unknown bucket.');
@@ -363,7 +407,7 @@ async function route(req, db, ip, admins, backup) {
       stmts.push(['INSERT INTO budgets (user_id, bucket_id, month, amount) VALUES (?, ?, ?, ?) ON CONFLICT (user_id, bucket_id, month) DO UPDATE SET amount = excluded.amount', uid, bid, b.month, cents]);
     }
     await db.batch(stmts);
-    const rows = await db.all('SELECT bucket_id, month, amount FROM budgets WHERE user_id = ? AND month = ?', uid, b.month);
+    const rows = await db.all<BudgetRow>('SELECT bucket_id, month, amount FROM budgets WHERE user_id = ? AND month = ?', uid, b.month);
     return json(200, rows.map((r) => ({ bucketId: r.bucket_id, month: r.month, amount: r.amount / 100 })));
   }
 
@@ -372,10 +416,10 @@ async function route(req, db, ip, admins, backup) {
     const b = await readBody(req);
     const name = cleanStr(b.name, 60);
     if (!name) return fail(400, 'Bucket needs a name.');
-    const { m } = await db.get('SELECT MAX(sort) AS m FROM buckets WHERE user_id = ?', uid);
+    const { m } = await one<{ m: number | null }>(db, 'SELECT MAX(sort) AS m FROM buckets WHERE user_id = ?', uid);
     const { lastId } = await db.run('INSERT INTO buckets (user_id, name, icon, color, monthly_budget, sort) VALUES (?, ?, ?, ?, ?, ?)',
-      uid, name, cleanStr(b.icon, 8), isColor(b.color) ? b.color : '#64748b', b.monthlyBudget && toCents(b.monthlyBudget) > 0 ? toCents(b.monthlyBudget) : null, (m ?? -1) + 1);
-    return json(200, bucketOut(await db.get('SELECT * FROM buckets WHERE id = ?', lastId)));
+      uid, name, cleanStr(b.icon, 8), isColor(b.color) ? b.color : '#64748b', budgetCents(b.monthlyBudget), (m ?? -1) + 1);
+    return json(200, bucketOut(await one<BucketRow>(db, 'SELECT * FROM buckets WHERE id = ?', lastId)));
   }
 
   if (pathname === '/api/buckets/order' && method === 'PUT') {
@@ -388,20 +432,20 @@ async function route(req, db, ip, admins, backup) {
   let m = pathname.match(/^\/api\/buckets\/(\d+)$/);
   if (m) {
     const id = Number(m[1]);
-    const cur = await db.get('SELECT * FROM buckets WHERE id = ? AND user_id = ?', id, uid);
+    const cur = await db.get<BucketRow>('SELECT * FROM buckets WHERE id = ? AND user_id = ?', id, uid);
     if (!cur) return fail(404, 'Bucket not found.');
     if (method === 'PUT') {
       const b = await readBody(req);
       const name = b.name !== undefined ? cleanStr(b.name, 60) || cur.name : cur.name;
       const icon = b.icon !== undefined ? cleanStr(b.icon, 8) : cur.icon;
       const color = isColor(b.color) ? b.color : cur.color;
-      const budget = b.monthlyBudget === undefined ? cur.monthly_budget : (b.monthlyBudget && toCents(b.monthlyBudget) > 0 ? toCents(b.monthlyBudget) : null);
+      const budget = b.monthlyBudget === undefined ? cur.monthly_budget : budgetCents(b.monthlyBudget);
       const archived = b.archived === undefined ? cur.archived : (b.archived ? 1 : 0);
       await db.run('UPDATE buckets SET name=?, icon=?, color=?, monthly_budget=?, archived=? WHERE id=?', name, icon, color, budget, archived, id);
-      return json(200, bucketOut(await db.get('SELECT * FROM buckets WHERE id = ?', id)));
+      return json(200, bucketOut(await one<BucketRow>(db, 'SELECT * FROM buckets WHERE id = ?', id)));
     }
     if (method === 'DELETE') {
-      const { c } = await db.get('SELECT COUNT(*) AS c FROM expenses WHERE bucket_id = ?', id);
+      const { c } = await one<{ c: number }>(db, 'SELECT COUNT(*) AS c FROM expenses WHERE bucket_id = ?', id);
       if (c) { // keep history intact: archive instead of deleting
         await db.run('UPDATE buckets SET archived = 1 WHERE id = ?', id);
         return json(200, { archived: true });
@@ -412,7 +456,7 @@ async function route(req, db, ip, admins, backup) {
   }
 
   // ----- expenses -----
-  const ownsBucket = async (bid) => !!(await db.get('SELECT 1 AS x FROM buckets WHERE id = ? AND user_id = ?', bid, uid));
+  const ownsBucket = async (bid: number): Promise<boolean> => !!(await db.get('SELECT 1 AS x FROM buckets WHERE id = ? AND user_id = ?', bid, uid));
 
   if (pathname === '/api/expenses' && method === 'POST') {
     const b = await readBody(req);
@@ -422,14 +466,14 @@ async function route(req, db, ip, admins, backup) {
     if (!(await ownsBucket(Number(b.bucketId)))) return fail(400, 'Pick a bucket.');
     const { lastId } = await db.run('INSERT INTO expenses (user_id, bucket_id, amount, date, note) VALUES (?, ?, ?, ?, ?)',
       uid, Number(b.bucketId), amount, b.date, cleanStr(b.note, 200));
-    return json(200, expenseOut(await db.get('SELECT * FROM expenses WHERE id = ?', lastId)));
+    return json(200, expenseOut(await one<ExpenseRow>(db, 'SELECT * FROM expenses WHERE id = ?', lastId)));
   }
 
   if (pathname === '/api/expenses/import' && method === 'POST') {
     const b = await readBody(req);
     if (!Array.isArray(b.rows)) return fail(400, 'rows required');
-    const byName = new Map((await db.all('SELECT id, name FROM buckets WHERE user_id = ?', uid)).map((x) => [x.name.toLowerCase(), x.id]));
-    const stmts = [];
+    const byName = new Map((await db.all<{ id: number; name: string }>('SELECT id, name FROM buckets WHERE user_id = ?', uid)).map((x) => [x.name.toLowerCase(), x.id]));
+    const stmts: Stmt[] = [];
     let skipped = 0;
     for (const r of b.rows.slice(0, 20000)) {
       const amount = toCents(r.amount);
@@ -449,7 +493,7 @@ async function route(req, db, ip, admins, backup) {
   m = pathname.match(/^\/api\/expenses\/(\d+)$/);
   if (m) {
     const id = Number(m[1]);
-    const cur = await db.get('SELECT * FROM expenses WHERE id = ? AND user_id = ?', id, uid);
+    const cur = await db.get<ExpenseRow>('SELECT * FROM expenses WHERE id = ? AND user_id = ?', id, uid);
     if (!cur) return fail(404, 'Expense not found.');
     if (method === 'PUT') {
       const b = await readBody(req);
@@ -461,7 +505,7 @@ async function route(req, db, ip, admins, backup) {
       if (!(await ownsBucket(bucketId))) return fail(400, 'Pick a bucket.');
       const note = b.note !== undefined ? cleanStr(b.note, 200) : cur.note;
       await db.run('UPDATE expenses SET amount=?, date=?, bucket_id=?, note=? WHERE id=?', amount, date, bucketId, note, id);
-      return json(200, expenseOut(await db.get('SELECT * FROM expenses WHERE id = ?', id)));
+      return json(200, expenseOut(await one<ExpenseRow>(db, 'SELECT * FROM expenses WHERE id = ?', id)));
     }
     if (method === 'DELETE') {
       await db.run('DELETE FROM expenses WHERE id = ?', id);
@@ -470,9 +514,9 @@ async function route(req, db, ip, admins, backup) {
   }
 
   if (pathname === '/api/export.csv' && method === 'GET') {
-    const rows = await db.all(`SELECT e.date, b.name AS bucket, e.amount, e.note FROM expenses e
+    const rows = await db.all<{ date: string; bucket: string; amount: number; note: string }>(`SELECT e.date, b.name AS bucket, e.amount, e.note FROM expenses e
       JOIN buckets b ON b.id = e.bucket_id WHERE e.user_id = ? ORDER BY e.date`, uid);
-    const q = (s) => `"${String(s).replace(/"/g, '""')}"`;
+    const q = (s: unknown) => `"${String(s).replace(/"/g, '""')}"`;
     const csv = ['date,bucket,amount,note', ...rows.map((r) => [r.date, q(r.bucket), (r.amount / 100).toFixed(2), q(r.note)].join(','))].join('\n');
     return new Response(csv, { headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="expenses.csv"', 'Cache-Control': 'no-store' } });
   }
@@ -482,12 +526,12 @@ async function route(req, db, ip, admins, backup) {
 
 // ---------- backups ----------
 /** Full snapshot of everything needed to restore accounts (not sessions/attempts/tokens). */
-export async function snapshot(db) {
+export async function snapshot(db: Db): Promise<Snapshot> {
   const [users, buckets, expenses, budgets] = await Promise.all([
-    db.all('SELECT * FROM users ORDER BY id'),
-    db.all('SELECT * FROM buckets ORDER BY id'),
-    db.all('SELECT * FROM expenses ORDER BY id'),
-    db.all('SELECT * FROM budgets ORDER BY user_id, month'),
+    db.all<UserRow>('SELECT * FROM users ORDER BY id'),
+    db.all<BucketRow>('SELECT * FROM buckets ORDER BY id'),
+    db.all<ExpenseRow>('SELECT * FROM expenses ORDER BY id'),
+    db.all<BudgetRow>('SELECT * FROM budgets ORDER BY user_id, month'),
   ]);
   return { version: 3, takenAt: new Date().toISOString(), users, buckets, expenses, budgets };
 }

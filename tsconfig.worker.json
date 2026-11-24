@@ -1,0 +1,10 @@
+{
+  // Type checking for the Cloudflare Worker (see tsconfig.json).
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "types": ["@cloudflare/workers-types"]
+  },
+  "include": ["src/worker.ts", "src/api.ts"]
+}

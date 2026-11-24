@@ -1,5 +1,5 @@
 name = "budgedora"
-main = "src/worker.js"
+main = "src/worker.ts"
 compatibility_date = "2025-09-01"
 
 # Static front-end. Every request runs the Worker first so security headers apply to pages too.

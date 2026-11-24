@@ -1,17 +1,17 @@
 // Writes a SQL file that (re)creates a demo account with ~3 years of made-up expenses,
 // for loading into the live Cloudflare D1 database:
-//   node scripts/demo-sql.js <email> <password> <name> <out.sql>
+//   node scripts/demo-sql.ts <email> <password> <name> <out.sql>
 //   wrangler d1 execute budgedora --remote --file=<out.sql>
 import fs from 'node:fs';
-import { DEFAULT_BUCKETS, hashPassword } from '../src/api.js';
-import { demoExpenses, DEMO_BUDGETS } from './demo-data.js';
+import { DEFAULT_BUCKETS, hashPassword } from '../src/api.ts';
+import { demoExpenses, DEMO_BUDGETS } from './demo-data.ts';
 
 const [email, password, name = 'Demo', out = 'demo.sql'] = process.argv.slice(2);
 if (!email || !password) {
-  console.error('Usage: node scripts/demo-sql.js <email> <password> [name] [out.sql]');
+  console.error('Usage: node scripts/demo-sql.ts <email> <password> [name] [out.sql]');
   process.exit(1);
 }
-const q = (s) => `'${String(s).replace(/'/g, "''")}'`;
+const q = (s: unknown) => `'${String(s).replace(/'/g, "''")}'`;
 const U = `(SELECT id FROM users WHERE email = ${q(email)})`;
 const lines = [
   `DELETE FROM expenses WHERE user_id = ${U};`,
@@ -23,10 +23,10 @@ const lines = [
     `INSERT INTO buckets (user_id, name, icon, color, sort, monthly_budget) VALUES (${U}, ${q(n)}, ${q(i)}, ${q(c)}, ${idx}, ${DEMO_BUDGETS[n] ?? 'NULL'});`),
 ];
 // Group expenses per bucket into multi-row INSERT … SELECT statements (fast to import).
-const byBucket = new Map();
+const byBucket = new Map<string, string[]>();
 for (const [b, amt, date, note] of demoExpenses()) {
   if (!byBucket.has(b)) byBucket.set(b, []);
-  byBucket.get(b).push(`(${amt}, ${q(date)}, ${q(note)})`);
+  byBucket.get(b)!.push(`(${amt}, ${q(date)}, ${q(note)})`);
 }
 for (const [b, vals] of byBucket) {
   const B = `(SELECT id FROM buckets WHERE user_id = ${U} AND name = ${q(b)})`;
