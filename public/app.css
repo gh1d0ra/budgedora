@@ -321,6 +321,15 @@ dialog.wide { width: min(760px, calc(100vw - 32px)); }
 #xlsxBody h4 { margin: 16px 0 6px; font-size: 13.5px; }
 #xlsxBody select { padding: 6px 8px; max-width: 240px; }
 .scroll-y { max-height: 300px; overflow-y: auto; }
+.scroll-y.tall { max-height: min(52vh, 520px); }
+.stmt-chips { margin: 10px 0; }
+.stmt-tbl th:nth-child(3) { text-align: left; }
+.stmt-tbl td.desc { text-align: left; white-space: normal; min-width: 180px; }
+.stmt-tbl td:first-child { width: 24px; }
+.stmt-tbl tr.off td { opacity: .5; }
+.stmt-tbl select { padding: 5px 6px; max-width: 200px; }
+.stmt-tbl select.need { border-color: var(--danger); }
+.stmt-tbl .badge { font-size: 10.5px; padding: 1px 6px; margin-left: 4px; }
 #deleteDialog p { line-height: 1.5; }
 .backup-row { margin-top: 14px; align-items: center; }
 

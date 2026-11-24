@@ -892,11 +892,11 @@
   const SKIP_HEADER = /^(month|date|total|totals|income|income avg|expected expenses|expenses|overbudget|over budget|remaining|budget|sum|notes?)$/i;
   let xlsxPlan = null;
 
-  function loadScript(src) {
+  function loadScript(src, global = 'XLSX', what = 'Excel') {
     return new Promise((resolve, reject) => {
-      if (window.XLSX) return resolve();
+      if (window[global]) return resolve();
       const s = document.createElement('script');
-      s.src = src; s.onload = resolve; s.onerror = () => reject(new Error('Could not load the Excel reader. Check your connection.'));
+      s.src = src; s.onload = resolve; s.onerror = () => reject(new Error(`Could not load the ${what} reader. Check your connection.`));
       document.head.appendChild(s);
     });
   }
@@ -1049,6 +1049,195 @@
       btn.disabled = false; btn.textContent = 'Retry import';
     }
   });
+  // ---------- Bank / card statement import (AMEX, Chase, Wells Fargo, any CSV/Excel/OFX; read in the browser) ----------
+  const ST = window.Statements;
+  let stmt = null; // { files: [{name, source, kind, count}], rows, view }
+  const PDFJS = '/vendor/pdfjs-3.11.174/';
+  /** Positioned text of every page of a PDF, read in the browser with pdf.js (self-hosted). */
+  async function pdfPages(file) {
+    await loadScript(PDFJS + 'pdf.min.js', 'pdfjsLib', 'PDF');
+    pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS + 'pdf.worker.min.js';
+    const doc = await pdfjsLib.getDocument({ data: new Uint8Array(await file.arrayBuffer()), isEvalSupported: false, disableFontFace: true }).promise;
+    const pages = [];
+    for (let n = 1; n <= doc.numPages; n++) {
+      const tc = await (await doc.getPage(n)).getTextContent();
+      pages.push(tc.items.map((i) => ({ x: i.transform[4], y: i.transform[5], w: i.width, str: i.str })));
+    }
+    doc.destroy();
+    return pages;
+  }
+
+  function renderAmazonUpdate() {
+    const p = stmt, on = p.rows.filter((r) => r.on);
+    $('#stmtBody').innerHTML = `
+      <p class="muted small"><b>Amazon order history</b> · ${p.orders} orders. Matched <b>${p.rows.length}</b> of your ${p.candidates} Amazon expenses by amount and date — untick any that look wrong. Only the note changes; buckets stay as they are.</p>
+      <div class="table-wrap scroll-y tall"><table class="tbl stmt-tbl"><thead><tr><th></th><th>Date</th><th>Note now → new note</th><th>Amount</th></tr></thead><tbody>
+      ${p.rows.map((r, i) => `<tr class="${r.on ? '' : 'off'}"><td><input type="checkbox" data-on="${i}" ${r.on ? 'checked' : ''} aria-label="Update this expense"></td>
+        <td>${esc(fmtDate(r.date))}</td><td class="desc"><span class="muted">${esc(r.old)}</span><br><span title="${esc(r.items.join('\n'))}">${esc(r.desc)}</span></td><td>${fmt(r.spend)}</td></tr>`).join('')}
+      </tbody></table></div>`;
+    const btn = $('#stmtImport');
+    btn.textContent = `Update ${on.length} expenses`;
+    btn.disabled = !on.length;
+  }
+
+  function renderStmt() {
+    if (stmt.mode === 'update') return renderAmazonUpdate();
+    const p = stmt;
+    const opts = (sel) => `<option value="">— Pick a bucket —</option>` +
+      activeBuckets().map((b) => `<option value="${b.id}" ${sel === b.id ? 'selected' : ''}>${esc(b.icon)} ${esc(b.name)}</option>`).join('');
+    const main = p.rows.filter((r) => !r.skip && !r.dup), other = p.rows.filter((r) => r.skip || r.dup);
+    const on = p.rows.filter((r) => r.on), need = on.filter((r) => !r.bucketId);
+    const views = { main: ['To import', main], need: ['Needs a bucket', need], other: ['Skipped', other] };
+    if (p.view === 'need' && !need.length) p.view = 'main';
+    const list = views[p.view][1];
+    const chips = Object.entries(views).map(([k, [label, arr]]) =>
+      `<button type="button" class="chip ${p.view === k ? 'active' : ''}" data-view="${k}">${label} (${arr.length})</button>`).join('');
+    const rowsHtml = list.slice(0, 1500).map((r) => {
+      const i = p.rows.indexOf(r);
+      const why = r.dup ? '<span class="badge lock">already in app</span>' : r.skip ? `<span class="badge del">${esc(r.skip)}</span>` : '';
+      const sub = [p.files.length > 1 ? r.source : '', r.member, r.category].filter(Boolean).map(esc).join(' · ');
+      return `<tr class="${r.on ? '' : 'off'}">
+        <td><input type="checkbox" data-on="${i}" ${r.on ? 'checked' : ''} aria-label="Import this row"></td>
+        <td>${esc(fmtDate(r.date))}</td>
+        <td class="desc"><span title="${esc(r.items ? r.items.join('\n') : r.raw)}">${esc(r.desc)}</span> ${why}${sub ? `<div class="muted small">${sub}</div>` : ''}</td>
+        <td class="${r.spend < 0 ? 'down' : ''}">${fmt(r.spend)}</td>
+        <td><select data-b="${i}" class="${r.on && !r.bucketId ? 'need' : ''}">${opts(r.bucketId)}</select></td></tr>`;
+    }).join('');
+    const total = on.reduce((s, r) => s + r.spend, 0);
+    const dates = p.rows.map((r) => r.date).sort();
+    $('#stmtBody').innerHTML = `
+      <p class="muted small">${p.files.map((f) => `<b>${esc(f.source)}</b>${f.kind === 'bank' ? ' checking' : f.kind === 'card' ? ' card' : ''} · ${esc(f.name)} · ${f.count} transactions${!f.check ? ''
+        : f.check.ok ? ' · <span class="badge ok">✓ adds up to the statement totals</span>'
+        : ` · <span class="badge del">⚠ read ${fmt(f.check.got)}, statement says ${fmt(f.check.expected)} — some lines may be missing</span>`}`).join('<br>')}
+        ${dates.length ? `<br>${esc(fmtDate(dates[0]))} – ${esc(fmtDate(dates[dates.length - 1]))}` : ''}</p>
+      ${p.amazon ? `<p class="small">📦 <b>Amazon:</b> ${p.amazon.matched} of ${p.amazon.candidates} Amazon charges matched to items from ${p.amazon.orders} orders${p.amazon.matched < p.amazon.candidates ? ' (the rest keep the bank’s description)' : ''}.</p>` : ''}
+      <p class="muted small">Card payments, transfers and money coming in are skipped, and so is anything already in the app. Credits such as returns are saved as refunds. Picking a bucket for one row also sets it for the same merchant in the other rows.</p>
+      <div class="chips stmt-chips">${chips}</div>
+      <div class="table-wrap scroll-y tall"><table class="tbl stmt-tbl"><thead><tr><th></th><th>Date</th><th>Description</th><th>Amount</th><th>Bucket</th></tr></thead>
+        <tbody>${rowsHtml || '<tr><td colspan="5" class="muted">Nothing here.</td></tr>'}</tbody></table></div>
+      <p class="small"><b>${on.length}</b> transactions · <b>${fmt(total)}</b> will be imported${need.length ? ` · <span class="up">${need.length} still need a bucket</span>` : ''}.</p>`;
+    const btn = $('#stmtImport');
+    btn.textContent = need.length ? `Pick buckets for ${need.length} more` : `Import ${on.length} transactions`;
+    btn.disabled = !on.length || need.length > 0;
+  }
+
+  $('#stmtFile').addEventListener('change', async (e) => {
+    const files = [...e.target.files];
+    e.target.value = '';
+    if (!files.length) return;
+    const parsed = [], problems = [], orders = new Map();
+    const addAmazon = (p) => { for (const [k, o] of p.orders) orders.set(k, o); };
+    for (const file of files) {
+      try {
+        let p;
+        if (/\.zip$/i.test(file.name)) {
+          // Amazon's "Your Orders" download: read the order CSVs straight out of the zip
+          await loadScript(XLSX_URL);
+          const zip = XLSX.CFB.read(new Uint8Array(await file.arrayBuffer()), { type: 'array' });
+          let found = 0;
+          zip.FullPaths.forEach((path, i) => {
+            const ent = zip.FileIndex[i];
+            if (!ent || ent.type !== 2 || !/\.csv$/i.test(path)) return;
+            const az = ST.parseAmazon(ST.parseCsv(new TextDecoder().decode(ent.content)));
+            if (az) { addAmazon(az); found += az.orders.size; }
+          });
+          if (!found) throw new Error(`${file.name}: no Amazon order history found in this zip.`);
+          continue;
+        }
+        if (/\.xlsx?$|\.xlsm$/i.test(file.name)) {
+          await loadScript(XLSX_URL);
+          const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
+          p = ST.parseFile({ name: file.name, workbook: wb, XLSX });
+        } else if (/\.pdf$/i.test(file.name) || file.type === 'application/pdf') {
+          p = ST.parseFile({ name: file.name, pdfPages: await pdfPages(file) });
+        } else {
+          p = ST.parseFile({ name: file.name, text: await file.text() });
+        }
+        if (p.amazon) { addAmazon(p); continue; }
+        if (!p.txns.length) throw new Error(`No transactions found in ${file.name}.`);
+        parsed.push({ ...p, name: file.name });
+      } catch (err) { problems.push(err.message || `Could not read ${file.name}`); }
+    }
+    if (!parsed.length && !orders.size) return toast(problems.join(' '));
+    if (!parsed.length) {
+      // Amazon file on its own: put product names on Amazon expenses already in the app
+      const rows = state.expenses.filter((x) => ST.AMAZON_RE.test(x.note) && !/^(amazon|kindle)( return)?:/i.test(x.note))
+        .map((x) => ({ id: x.id, date: x.date, spend: x.amount, raw: x.note, desc: x.note, old: x.note }));
+      const res = ST.enrichAmazon(rows, orders, null);
+      if (!res.matched) return toast(rows.length ? `None of your ${rows.length} Amazon expenses matched an order in that file (by amount and date).` : 'No Amazon expenses in the app yet — import your card statement together with the Amazon file.');
+      stmt = { mode: 'update', orders: orders.size, rows: rows.filter((r) => r.amazon).map((r) => ({ ...r, on: true })), candidates: res.candidates };
+    } else {
+      const rows = ST.plan(parsed, { buckets: state.buckets, expenses: state.expenses });
+      const az = orders.size ? ST.enrichAmazon(rows, orders, activeBuckets()) : null;
+      stmt = {
+        files: parsed.map((p) => ({ name: p.name, source: p.source, kind: p.kind, count: p.txns.length, check: p.check || null })),
+        rows, view: 'main', amazon: az && { ...az, orders: orders.size },
+      };
+    }
+    $('#stmtError').textContent = problems.join(' ');
+    $('#stmtError').hidden = !problems.length;
+    renderStmt();
+    $('#stmtDialog').showModal();
+  });
+  $('#stmtBody').addEventListener('change', (e) => {
+    const t = e.target;
+    if (t.dataset.on !== undefined) stmt.rows[Number(t.dataset.on)].on = t.checked;
+    if (t.dataset.b !== undefined) {
+      const row = stmt.rows[Number(t.dataset.b)];
+      const id = t.value ? Number(t.value) : null;
+      row.bucketId = id; row.manual = true;
+      if (id) row.on = true;
+      // same merchant elsewhere in the statement → same bucket, unless the user already chose one there
+      if (id && row.key && !row.amazon) stmt.rows.forEach((r) => { if (!r.manual && !r.amazon && r.key === row.key) r.bucketId = id; });
+    }
+    renderStmt();
+  });
+  $('#stmtBody').addEventListener('click', (e) => {
+    const v = e.target.closest('[data-view]'); if (!v) return;
+    stmt.view = v.dataset.view; renderStmt();
+  });
+  $('#stmtCancel').addEventListener('click', () => $('#stmtDialog').close());
+  $('#stmtImport').addEventListener('click', async () => {
+    if (stmt.mode === 'update') {
+      const btn = $('#stmtImport'), todo = stmt.rows.filter((r) => r.on);
+      btn.disabled = true;
+      let done = 0;
+      try {
+        for (let i = 0; i < todo.length; i += 6) {
+          btn.textContent = `Updating… ${Math.round((i / todo.length) * 100)}%`;
+          await Promise.all(todo.slice(i, i + 6).map((r) => api('PUT', `/api/expenses/${r.id}`, { note: r.desc }).then(() => done++)));
+        }
+        $('#stmtDialog').close();
+        await load();
+        switchTab('history');
+        toast(`Added product names to ${done} Amazon expenses 📦`);
+      } catch (err) {
+        $('#stmtError').textContent = `${err.message} — ${done} were updated; run it again to finish the rest.`;
+        $('#stmtError').hidden = false;
+        btn.disabled = false; btn.textContent = 'Retry';
+      }
+      return;
+    }
+    const rows = stmt.rows.filter((r) => r.on && r.bucketId).map((r) => ({ date: r.date, bucket: bucketById(r.bucketId).name, amount: r.spend, note: r.desc }));
+    const btn = $('#stmtImport');
+    btn.disabled = true;
+    try {
+      let added = 0;
+      for (let i = 0; i < rows.length; i += 4000) {
+        btn.textContent = `Importing… ${Math.round((i / rows.length) * 100)}%`;
+        added += (await api('POST', '/api/expenses/import', { rows: rows.slice(i, i + 4000) })).added;
+      }
+      $('#stmtDialog').close();
+      await load();
+      switchTab('history');
+      toast(`Imported ${added} transactions 🎉`);
+    } catch (err) {
+      $('#stmtError').textContent = `${err.message} — nothing after this point was saved; check History before retrying.`;
+      $('#stmtError').hidden = false;
+      btn.disabled = false; btn.textContent = 'Retry import';
+    }
+  });
+
   $('#showArchived').addEventListener('change', (e) => { state.showArchived = e.target.checked; renderSettings(); });
 
   $('#bucketEdit').addEventListener('change', async (e) => {

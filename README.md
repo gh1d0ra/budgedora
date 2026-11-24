@@ -36,7 +36,10 @@ copy last month's plan, and a year table (Expected · Actual · Over budget · R
 
 **Refunds** — negative amounts (or the ↩ Refund toggle) subtract from a bucket.
 
-**Data** — import your **Excel budget** (one sheet per month, one column per category; read in the browser and
+**Data** — import **bank / card statements**: American Express (CSV or Excel), Chase and Wells Fargo (CSV, card or checking),
+or their PDF statements (read in the browser with a self-hosted pdf.js), or any bank's CSV / QFX / OFX — several files at once. Card payments, transfers and income are skipped, re-imported
+transactions are detected, and buckets are guessed from your history, merchant names and the bank's category; you review
+every row before saving. Also import your **Excel budget** (one sheet per month, one column per category; read in the browser and
 reviewed before saving), CSV export/import (`date,bucket,amount,note`).
 
 ## Security

@@ -209,12 +209,15 @@
         <div class="card">
           <h3>Data</h3>
           <div class="row wrap gap">
+            <label class="btn">🏦 Import bank / card statement<input type="file" id="stmtFile" accept=".csv,.xlsx,.xls,.qfx,.ofx,.pdf,.zip,text/csv" multiple hidden></label>
             <label class="btn">📊 Import Excel budget<input type="file" id="xlsxFile" accept=".xlsx,.xlsm,.xls" hidden></label>
             <label class="btn">⬆ Import CSV<input type="file" id="importFile" accept=".csv,text/csv" hidden></label>
             <a class="btn" href="/api/export.csv">⬇ Export CSV</a>
             <button class="btn" id="logoutBtn" type="button">Sign out</button>
           </div>
-          <p class="muted small"><b>Excel:</b> one sheet per month (named like “Aug 26”, “Sept 25”), one column per category, one amount per row; negative numbers are refunds. Summary sheets are skipped. Your file is read in your browser — you'll review everything before it's saved.<br>
+          <p class="muted small"><b>Statements:</b> the activity download from <b>American Express</b> (CSV or Excel), <b>Chase</b> or <b>Wells Fargo</b> (CSV) — card or checking — or their <b>PDF statements</b>, or any bank's CSV / QFX / OFX. You can pick several files at once. Card payments and transfers are skipped, re-imported transactions are detected, and buckets are guessed from your history — you review everything before it's saved.<br>
+          <b>Amazon:</b> to see what you bought instead of “AMAZON MKTPL”, get your order history from amazon.com → Account → <i>Request Your Information</i> → <i>Your Orders</i> (Amazon emails a link, usually within a day). Pick that zip together with your card statement — or on its own to add product names to Amazon expenses already here.<br>
+          <b>Excel:</b> one sheet per month (named like “Aug 26”, “Sept 25”), one column per category, one amount per row; negative numbers are refunds. Summary sheets are skipped. Your file is read in your browser — you'll review everything before it's saved.<br>
           <b>CSV:</b> columns <code>date,bucket,amount,note</code> (date as YYYY-MM-DD). Unknown buckets are created automatically.</p>
         </div>
 
@@ -292,10 +295,24 @@
     </div>
   </dialog>
 
+  <!-- Bank / card statement import review -->
+  <dialog id="stmtDialog" class="wide">
+    <div class="edit-form">
+      <h3>Import statement</h3>
+      <div id="stmtBody"></div>
+      <p class="error" id="stmtError" hidden></p>
+      <div class="row gap end">
+        <button class="btn" type="button" id="stmtCancel">Cancel</button>
+        <button class="btn primary" type="button" id="stmtImport">Import</button>
+      </div>
+    </div>
+  </dialog>
+
   <div id="toast" class="toast" hidden></div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
   <script src="smart.js"></script>
+  <script src="statements.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
