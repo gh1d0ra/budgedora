@@ -1,0 +1,13 @@
+{
+  "name": "budgedora",
+  "version": "1.0.0",
+  "description": "Super simple multi-account expense tracker with buckets, smart questions and reports.",
+  "main": "server.js",
+  "private": true,
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "start": "node server.js",
+    "seed": "node scripts/seed-demo.js"
+  },
+  "license": "MIT"
+}

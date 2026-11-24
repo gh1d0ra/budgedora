@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f766e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>Budgedora — expenses</title>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <!-- ============ AUTH ============ -->
+  <section id="auth" class="auth" hidden>
+    <div class="auth-card">
+      <div class="brand big"><span class="logo">🐉</span> Budgedora</div>
+      <p class="muted">The fastest way to log what you spend.</p>
+      <div class="seg" role="tablist">
+        <button type="button" class="seg-btn active" data-auth="login">Sign in</button>
+        <button type="button" class="seg-btn" data-auth="signup">Create account</button>
+      </div>
+      <form id="authForm" autocomplete="on">
+        <label class="field signup-only" hidden><span>Name</span><input name="name" autocomplete="name" placeholder="Your name"></label>
+        <label class="field"><span>Email</span><input name="email" type="email" required autocomplete="email" placeholder="you@example.com"></label>
+        <label class="field"><span>Password</span><input name="password" type="password" required minlength="6" autocomplete="current-password" placeholder="At least 6 characters"></label>
+        <p id="authError" class="error" hidden></p>
+        <button class="btn primary block" type="submit" id="authSubmit">Sign in</button>
+      </form>
+    </div>
+  </section>
+
+  <!-- ============ APP ============ -->
+  <div id="app" hidden>
+    <header class="topbar">
+      <div class="brand"><span class="logo">🐉</span> Budgedora</div>
+      <nav class="tabs" id="tabs">
+        <button data-tab="add" class="active"><span>＋</span>Add</button>
+        <button data-tab="history"><span>☰</span>History</button>
+        <button data-tab="reports"><span>◔</span>Reports</button>
+        <button data-tab="settings"><span>⚙</span>Buckets</button>
+      </nav>
+      <div class="user" id="userName"></div>
+    </header>
+
+    <main>
+      <!-- ADD -->
+      <section class="view" id="view-add">
+        <form id="addForm" class="card add-card" autocomplete="off">
+          <div class="amount-wrap">
+            <span class="cur" id="curSymbol">$</span>
+            <input id="amount" inputmode="decimal" placeholder="0.00" aria-label="Amount" enterkeyhint="done">
+          </div>
+          <div class="amount-hint" id="amountHint">&nbsp;</div>
+          <div id="smartSuggest" class="smart-suggest" hidden></div>
+
+          <div class="bucket-grid" id="bucketGrid" role="radiogroup" aria-label="Bucket"></div>
+
+          <div class="row date-row">
+            <div class="chips" id="dateChips">
+              <button type="button" class="chip" data-day="0">Today</button>
+              <button type="button" class="chip" data-day="-1">Yesterday</button>
+            </div>
+            <input type="date" id="date" class="date-input" aria-label="Date">
+          </div>
+          <input id="note" class="note-input" placeholder="Note (optional) — e.g. Costco, Netflix…" maxlength="200">
+          <button class="btn primary block big" type="submit" id="saveBtn">Save expense</button>
+        </form>
+
+        <div class="card month-card" id="monthCard"></div>
+        <div class="card">
+          <div class="card-head"><h3>Recent</h3><button class="link" data-goto="history">See all →</button></div>
+          <ul class="tx-list" id="recentList"></ul>
+        </div>
+      </section>
+
+      <!-- HISTORY -->
+      <section class="view" id="view-history" hidden>
+        <div class="card">
+          <div class="history-filters">
+            <input id="histSearch" type="search" placeholder="Search notes, buckets or amounts (e.g. costco, >100)">
+            <select id="histBucket"><option value="">All buckets</option></select>
+            <select id="histMonth"><option value="">All months</option></select>
+          </div>
+          <div class="hist-summary muted" id="histSummary"></div>
+          <div id="histList"></div>
+        </div>
+      </section>
+
+      <!-- REPORTS -->
+      <section class="view" id="view-reports" hidden>
+        <form class="ask card" id="askForm">
+          <span class="ask-icon">✨</span>
+          <input id="askInput" placeholder="Ask anything… “groceries last year”, “restaurants vs groceries 2025”, “top expenses in march”">
+          <button class="btn primary" type="submit">Ask</button>
+        </form>
+        <div class="ask-examples" id="askExamples"></div>
+        <div id="askResult"></div>
+
+        <div class="period-bar card">
+          <div class="chips" id="periodChips"></div>
+          <div class="period-custom">
+            <select id="periodYear"></select>
+            <select id="periodMonth">
+              <option value="">Whole year</option>
+            </select>
+          </div>
+        </div>
+        <h2 class="period-title" id="periodTitle"></h2>
+
+        <div class="kpis" id="kpis"></div>
+        <div class="card insights" id="insights"></div>
+
+        <div class="grid-2">
+          <div class="card"><h3>Where it went</h3><div class="chart-box"><canvas id="chDonut"></canvas></div></div>
+          <div class="card"><h3 id="trendTitle">Monthly spending</h3><div class="chart-box"><canvas id="chTrend"></canvas></div></div>
+        </div>
+
+        <div class="card"><h3>By bucket</h3><div class="table-wrap"><table class="tbl" id="bucketTable"></table></div></div>
+
+        <div class="card"><h3>Year over year</h3><div class="chart-box tall"><canvas id="chYoy"></canvas></div></div>
+
+        <div class="card"><h3>Years × months <span class="muted small">— click a cell to drill in</span></h3><div class="table-wrap"><table class="tbl pivot" id="pivotYM"></table></div></div>
+
+        <div class="card"><h3 id="pivotBMTitle">Buckets × months</h3><div class="table-wrap"><table class="tbl pivot" id="pivotBM"></table></div></div>
+
+        <div class="grid-2">
+          <div class="card"><h3>Biggest expenses</h3><ul class="tx-list" id="topList"></ul></div>
+          <div class="card"><h3>By day of week</h3><div class="chart-box"><canvas id="chDow"></canvas></div></div>
+        </div>
+      </section>
+
+      <!-- SETTINGS / BUCKETS -->
+      <section class="view" id="view-settings" hidden>
+        <div class="card">
+          <div class="card-head"><h3>Your buckets</h3><span class="muted small">Set an optional monthly budget for each one</span></div>
+          <ul class="bucket-edit" id="bucketEdit"></ul>
+          <form id="newBucketForm" class="new-bucket">
+            <input name="icon" placeholder="🙂" maxlength="4" class="icon-in" aria-label="Icon">
+            <input name="name" placeholder="New bucket name" required maxlength="60">
+            <input name="color" type="color" value="#64748b" aria-label="Color">
+            <button class="btn primary" type="submit">Add</button>
+          </form>
+          <label class="toggle"><input type="checkbox" id="showArchived"> Show archived buckets</label>
+        </div>
+
+        <div class="card">
+          <h3>Account</h3>
+          <form id="accountForm" class="account-form">
+            <label class="field"><span>Name</span><input name="name"></label>
+            <label class="field"><span>Currency</span>
+              <select name="currency">
+                <option>USD</option><option>EUR</option><option>GBP</option><option>CAD</option><option>AUD</option><option>RON</option><option>MDL</option><option>CHF</option><option>JPY</option><option>MXN</option><option>INR</option>
+              </select>
+            </label>
+            <details>
+              <summary>Change password</summary>
+              <label class="field"><span>Current password</span><input name="currentPassword" type="password" autocomplete="current-password"></label>
+              <label class="field"><span>New password</span><input name="newPassword" type="password" minlength="6" autocomplete="new-password"></label>
+            </details>
+            <button class="btn primary" type="submit">Save</button>
+          </form>
+        </div>
+
+        <div class="card">
+          <h3>Data</h3>
+          <div class="row wrap gap">
+            <a class="btn" href="/api/export.csv">⬇ Export CSV</a>
+            <label class="btn">⬆ Import CSV<input type="file" id="importFile" accept=".csv,text/csv" hidden></label>
+            <button class="btn danger" id="logoutBtn" type="button">Sign out</button>
+          </div>
+          <p class="muted small">CSV columns: <code>date,bucket,amount,note</code> (date as YYYY-MM-DD). Unknown buckets are created automatically.</p>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Edit modal -->
+  <dialog id="editDialog">
+    <form id="editForm" method="dialog" class="edit-form">
+      <h3>Edit expense</h3>
+      <label class="field"><span>Amount</span><input name="amount" inputmode="decimal" required></label>
+      <label class="field"><span>Bucket</span><select name="bucketId"></select></label>
+      <label class="field"><span>Date</span><input name="date" type="date" required></label>
+      <label class="field"><span>Note</span><input name="note" maxlength="200"></label>
+      <div class="row gap end">
+        <button class="btn danger" value="delete" type="submit">Delete</button>
+        <span class="spacer"></span>
+        <button class="btn" value="cancel" type="submit" formnovalidate>Cancel</button>
+        <button class="btn primary" value="save" type="submit">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <script src="smart.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
