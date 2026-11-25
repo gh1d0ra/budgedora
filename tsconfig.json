@@ -15,5 +15,5 @@
     "erasableSyntaxOnly": true,
     "skipLibCheck": true
   },
-  "include": ["server.ts", "src/api.ts", "src/sqlite-db.ts", "scripts/*.ts", "test/*.ts", "e2e/*.ts", "playwright.config.ts"]
+  "include": ["server.ts", "src/api.ts", "src/sqlite-db.ts", "src/demo.ts", "src/api-types.ts", "scripts/*.ts", "test/*.ts", "e2e/*.ts", "playwright.config.ts"]
 }

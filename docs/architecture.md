@@ -166,15 +166,23 @@ flowchart LR
   PR --> UT["Unit + API tests<br/>node:test, Node 22 & 24"]
   PR --> WB["Worker bundle<br/>wrangler --dry-run"]
   PR --> E2E["Browser tests<br/>Playwright, desktop + phone"]
-  TC & UT & WB & E2E --> D{"main?"}
-  D -->|yes| DEP["wrangler deploy"]
+  PR --> API["Spec check<br/>openapi.json ↔ api-types.ts"]
+  TC & UT & WB & E2E & API --> D{"main?"}
+  D -->|yes| MIG["D1 migrations"] --> UP["Upload version<br/>(0% traffic)"] --> SMK["Smoke test<br/>its preview URL"] --> CAN["Canary 10%<br/>2 min"] --> PRO["100%"]
+  CAN -->|check fails| RB["Roll back"]
+  D -->|PR| PRV["Preview Worker<br/>own database"]
 ```
 
 - **Unit tests** (`test/statements.test.ts`, `test/smart.test.ts`) cover parsing, bucket guessing, duplicate detection,
   Amazon matching, plain-English questions and the calculator. They use made-up fixtures only.
 - **API tests** (`test/api.test.ts`) run the real API against in-memory SQLite. They cover sign-up, lockout, throttling,
   password reset, isolation between accounts, CRUD, import and export.
+- **Contract tests** (`test/contract.test.ts`) validate every API response against `public/openapi.json` with Ajv, and
+  require every documented operation to be exercised. The server code is also typed against types generated from the spec.
+- **Demo tests** (`test/demo.test.ts`) cover the public demo's isolation, limits and clean-up.
+- **Load test** (`load/api.k6.js`, k6) runs 25 people at once against a local server. In the last run, p95 was under 10 ms for every route.
 - **Browser tests** (`e2e/`) run the full flow in Chromium at desktop and phone sizes: sign up, add an expense, import an
   AMEX statement, and ask a question.
 
-Design decisions and their trade-offs are recorded in [`docs/decisions/`](decisions/).
+Releases: [release.md](release.md). Metrics, logs and targets: [observability.md](observability.md). Threats and controls:
+[threat-model.md](threat-model.md). Design decisions and their trade-offs: [`docs/decisions/`](decisions/).

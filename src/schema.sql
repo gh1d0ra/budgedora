@@ -7,7 +7,8 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   failed_logins INTEGER NOT NULL DEFAULT 0,
   locked_until INTEGER,
-  deleted_at TEXT
+  deleted_at TEXT,
+  is_demo INTEGER NOT NULL DEFAULT 0      -- public demo account (deleted after a day)
 );
 CREATE TABLE IF NOT EXISTS sessions (
   token TEXT PRIMARY KEY,

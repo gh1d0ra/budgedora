@@ -3,6 +3,9 @@
 //   db.all(sql, ...params) → rows    db.get(sql, ...params) → row | null
 //   db.run(sql, ...params) → { lastId, changes }    db.batch([[sql, ...params], ...])
 
+import { demoExpenses, DEMO_BUDGETS } from './demo.ts';
+import type { components } from './api-types.ts';
+
 // ---------- types ----------
 export type Param = string | number | null;
 export type Stmt = [sql: string, ...params: Param[]];
@@ -15,7 +18,7 @@ export interface Db {
 
 export interface UserRow {
   id: number; email: string; name: string; currency: string; pass_hash: string; created_at: string;
-  failed_logins: number; locked_until: number | null; deleted_at: string | null;
+  failed_logins: number; locked_until: number | null; deleted_at: string | null; is_demo: number;
 }
 export interface BucketRow {
   id: number; user_id: number; name: string; icon: string; color: string;
@@ -24,14 +27,19 @@ export interface BucketRow {
 export interface ExpenseRow { id: number; user_id: number; bucket_id: number; amount: number; date: string; note: string }
 export interface BudgetRow { user_id: number; bucket_id: number; month: string; amount: number }
 
-export interface User { id: number; email: string; name: string; currency: string; isAdmin: boolean }
+// Response shapes come from the OpenAPI spec (public/openapi.json → src/api-types.ts via `npm run api:types`),
+// so the type checker fails if the code and the published contract drift apart.
+type Schemas = components['schemas'];
+export type User = Schemas['User'];
 export type BackupKind = 'manual' | 'daily';
-export interface BackupResult { key: string; users: number; expenses: number; bytes: number; takenAt: string }
+export type BackupResult = Schemas['BackupResult'];
 export interface ApiOptions {
   ip?: string;
   /** Comma-separated admin emails. */
   admins?: string;
   backup?: ((kind: BackupKind) => Promise<BackupResult>) | null;
+  /** The running version (the Worker's version id), reported by /api/health. */
+  version?: string;
 }
 export interface Snapshot {
   version: number; takenAt: string;
@@ -58,6 +66,11 @@ export const DEFAULT_BUCKETS: [name: string, icon: string, color: string][] = [
 const SESSION_DAYS = 60;
 const PBKDF2_ITER = 100000; // Workers' maximum for PBKDF2
 const RESET_HOURS = 24;
+
+// Public demo: each visitor gets a private account full of made-up data, deleted after a day.
+const DEMO_HOURS = 24;
+const DEMO_PER_IP_PER_DAY = 10;
+const DEMO_PER_DAY = 100; // all visitors together: each demo writes ~1,300 rows and reads ~17,000, well inside the D1 free tier
 
 // Account lockout (NIST SP 800-63B / OWASP style): temporary, escalating, reset on success.
 const LOCK_AFTER = 5;                 // consecutive failures before the first lock
@@ -169,27 +182,29 @@ const checkNewPassword = (pw: unknown): void => {
 /** A positive monthly budget in cents, or null for "no budget". */
 const budgetCents = (v: unknown): number | null => { const c = toCents(v); return c && c > 0 ? c : null; };
 
-const bucketOut = (b: BucketRow) => ({
+const bucketOut = (b: BucketRow): Schemas['Bucket'] => ({
   id: b.id, name: b.name, icon: b.icon, color: b.color, sort: b.sort, archived: !!b.archived,
   monthlyBudget: b.monthly_budget == null ? null : b.monthly_budget / 100,
 });
-const expenseOut = (e: ExpenseRow) => ({ id: e.id, bucketId: e.bucket_id, amount: e.amount / 100, date: e.date, note: e.note });
+const expenseOut = (e: ExpenseRow): Schemas['Expense'] => ({ id: e.id, bucketId: e.bucket_id, amount: e.amount / 100, date: e.date, note: e.note });
+const budgetOut = (b: Pick<BudgetRow, 'bucket_id' | 'month' | 'amount'>): Schemas['Budget'] => ({ bucketId: b.bucket_id, month: b.month, amount: b.amount / 100 });
 
 // ---------- sessions & throttling ----------
-async function createSession(db: Db, userId: number): Promise<string> {
+async function createSession(db: Db, userId: number, hours = SESSION_DAYS * 24): Promise<string> {
   const token = randomToken();
-  await db.run('INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)', token, userId, Date.now() + SESSION_DAYS * 864e5);
+  await db.run('INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)', token, userId, Date.now() + hours * 3600e3);
   return token;
 }
 
 async function currentUser(db: Db, req: Request, admins: Set<string>): Promise<User | null> {
   const token = parseCookies(req).sid;
   if (!token) return null;
-  const row = await db.get<Pick<UserRow, 'id' | 'email' | 'name' | 'currency'> & { expires_at: number }>(`SELECT u.id, u.email, u.name, u.currency, s.expires_at
+  const row = await db.get<Pick<UserRow, 'id' | 'email' | 'name' | 'currency' | 'is_demo'> & { expires_at: number }>(`SELECT u.id, u.email, u.name, u.currency, u.is_demo, s.expires_at
     FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ? AND u.deleted_at IS NULL`, token);
   if (!row) return null;
   if (row.expires_at < Date.now()) { await db.run('DELETE FROM sessions WHERE token = ?', token); return null; }
-  return { id: row.id, email: row.email, name: row.name, currency: row.currency, isAdmin: admins.has(row.email.toLowerCase()) };
+  const isDemo = !!row.is_demo;
+  return { id: row.id, email: row.email, name: row.name, currency: row.currency, isAdmin: !isDemo && admins.has(row.email.toLowerCase()), isDemo };
 }
 
 /** Per-IP limit across all accounts: 30 sign-in/sign-up/reset attempts per 15 minutes. */
@@ -199,7 +214,7 @@ async function throttleIp(db: Db, ip: string): Promise<void> {
   if (n >= 30) throw new HttpError(429, 'Too many attempts from this network. Try again in a few minutes.');
   await db.batch([
     ['INSERT INTO login_attempts (ip, at) VALUES (?, ?)', ip, Date.now()],
-    ['DELETE FROM login_attempts WHERE at < ?', since],
+    ["DELETE FROM login_attempts WHERE at < ? AND ip NOT LIKE 'demo:%'", since], // demo:<ip> rows count demos per day
   ]);
 }
 
@@ -211,12 +226,18 @@ async function one<T>(db: Db, sql: string, ...params: Param[]): Promise<T> {
 }
 
 // ---------- API ----------
-export async function handleApi(req: Request, db: Db, { ip = 'unknown', admins = '', backup = null }: ApiOptions = {}): Promise<Response> {
+export async function handleApi(req: Request, db: Db, { ip = 'unknown', admins = '', backup = null, version = 'local' }: ApiOptions = {}): Promise<Response> {
   const adminSet = new Set(String(admins).split(',').map((s) => s.trim().toLowerCase()).filter(Boolean));
   let res: Response;
   try {
     // Basic CSRF guard: state-changing requests must be JSON (forces a CORS preflight cross-site).
-    if (req.method !== 'GET' && !String(req.headers.get('content-type') || '').includes('application/json')) {
+    if (req.method === 'GET' && new URL(req.url).pathname === '/api/health') {
+      // Used by the release script to smoke-test a new version before it gets traffic: the database answers,
+      // and the schema has every column this code needs (so a missed migration fails here, not for users).
+      await db.get('SELECT id, is_demo, deleted_at, locked_until FROM users LIMIT 1');
+      await db.get('SELECT user_id, month FROM budgets LIMIT 1');
+      res = json(200, { ok: true, version } satisfies Schemas['Health']);
+    } else if (req.method !== 'GET' && !String(req.headers.get('content-type') || '').includes('application/json')) {
       res = fail(415, 'Use application/json');
     } else {
       res = await route(req, db, ip, adminSet, backup);
@@ -298,10 +319,29 @@ async function route(req: Request, db: Db, ip: string, admins: Set<string>, back
     return json(200, { ok: true, email: row.email }, { 'Set-Cookie': sessionCookie(token, SESSION_DAYS * 86400, req) });
   }
 
+  // "Try the demo": a fresh private account with made-up data, signed in for DEMO_HOURS.
+  if (pathname === '/api/demo' && method === 'POST') {
+    const now = Date.now();
+    const [mine, all] = await Promise.all([
+      one<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM login_attempts WHERE ip = ? AND at > ?', `demo:${ip}`, now - 864e5),
+      one<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM users WHERE is_demo = 1 AND created_at > ?', sqlTime(now - 864e5)),
+    ]);
+    if (mine.n >= DEMO_PER_IP_PER_DAY) return fail(429, 'That’s a lot of demos from this network today. Try again tomorrow, or create an account.');
+    if (all.n >= DEMO_PER_DAY) return fail(503, 'The demo is very busy today. Try again tomorrow.');
+    await cleanupDemos(db, now);
+    await db.run('INSERT INTO login_attempts (ip, at) VALUES (?, ?)', `demo:${ip}`, now);
+    const uid = await createDemoAccount(db);
+    const token = await createSession(db, uid, DEMO_HOURS);
+    return json(200, { ok: true }, { 'Set-Cookie': sessionCookie(token, DEMO_HOURS * 3600, req) });
+  }
+
   // Everything below requires a session.
   const user = await currentUser(db, req, admins);
   if (!user) return fail(401, 'Not signed in.');
   const uid = user.id;
+  if (user.isDemo && ((pathname === '/api/me' && method === 'PUT') || pathname === '/api/account/delete')) {
+    return fail(403, 'The demo account can’t be changed or deleted. It’s removed automatically after a day.');
+  }
 
   if (pathname === '/api/me' && method === 'GET') return json(200, user);
 
@@ -343,9 +383,9 @@ async function route(req: Request, db: Db, ip: string, admins: Set<string>, back
       const rows = await db.all(`SELECT u.id, u.email, u.name, u.created_at, u.deleted_at, u.locked_until, u.failed_logins,
         (SELECT COUNT(*) FROM expenses e WHERE e.user_id = u.id) AS expenses,
         (SELECT MAX(date) FROM expenses e WHERE e.user_id = u.id) AS last_expense
-        FROM users u ORDER BY u.deleted_at IS NOT NULL, u.created_at`);
+        FROM users u WHERE u.is_demo = 0 ORDER BY u.deleted_at IS NOT NULL, u.created_at`);
       const now = Date.now();
-      return json(200, rows.map((r) => ({
+      return json(200, rows.map((r): Schemas['AdminUser'] => ({
         id: r.id, email: r.email, name: r.name, createdAt: r.created_at, deletedAt: r.deleted_at,
         locked: !!(r.locked_until && r.locked_until > now), failedLogins: r.failed_logins,
         expenses: r.expenses, lastExpense: r.last_expense, isAdmin: admins.has(r.email.toLowerCase()),
@@ -383,8 +423,8 @@ async function route(req: Request, db: Db, ip: string, admins: Set<string>, back
     ]);
     return json(200, {
       user, buckets: buckets.map(bucketOut), expenses: expenses.map(expenseOut),
-      budgets: budgets.map((b) => ({ bucketId: b.bucket_id, month: b.month, amount: b.amount / 100 })),
-    });
+      budgets: budgets.map(budgetOut),
+    } satisfies Schemas['Data']);
   }
 
   // ----- month plan: expected amount per bucket for one month -----
@@ -408,7 +448,7 @@ async function route(req: Request, db: Db, ip: string, admins: Set<string>, back
     }
     await db.batch(stmts);
     const rows = await db.all<BudgetRow>('SELECT bucket_id, month, amount FROM budgets WHERE user_id = ? AND month = ?', uid, b.month);
-    return json(200, rows.map((r) => ({ bucketId: r.bucket_id, month: r.month, amount: r.amount / 100 })));
+    return json(200, rows.map(budgetOut));
   }
 
   // ----- buckets -----
@@ -524,14 +564,54 @@ async function route(req: Request, db: Db, ip: string, admins: Set<string>, back
   return fail(404, 'Not found.');
 }
 
+// ---------- demo accounts ----------
+/** SQLite's datetime('now') format, which users.created_at uses. */
+const sqlTime = (ms: number): string => new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
+
+/**
+ * Creates a demo account with the default buckets and ~3 years of made-up expenses.
+ * Two statements in one batch (JSON rows expanded by json_each), so it fits the
+ * per-request query limit on Workers Free no matter how many rows there are.
+ */
+export async function createDemoAccount(db: Db, today = new Date()): Promise<number> {
+  const email = `demo-${randomToken().slice(0, 16)}@demo.invalid`;
+  const { lastId: uid } = await db.run("INSERT INTO users (email, name, pass_hash, is_demo) VALUES (?, 'Demo family', '!demo-no-password', 1)", email);
+  const buckets = DEFAULT_BUCKETS.map(([name, icon, color], i) => [name, icon, color, i, DEMO_BUDGETS[name] ?? null]);
+  await db.batch([
+    [`INSERT INTO buckets (user_id, name, icon, color, sort, monthly_budget)
+      SELECT ?, json_extract(value, '$[0]'), json_extract(value, '$[1]'), json_extract(value, '$[2]'), json_extract(value, '$[3]'), json_extract(value, '$[4]')
+      FROM json_each(?)`, uid, JSON.stringify(buckets)],
+    [`INSERT INTO expenses (user_id, bucket_id, amount, date, note)
+      SELECT ?, b.id, json_extract(j.value, '$[1]'), json_extract(j.value, '$[2]'), json_extract(j.value, '$[3]')
+      FROM json_each(?) j JOIN buckets b ON b.user_id = ? AND b.name = json_extract(j.value, '$[0]')`, uid, JSON.stringify(demoExpenses(today)), uid],
+  ]);
+  return uid;
+}
+
+/** Deletes demo accounts older than DEMO_HOURS, with everything in them, and old demo counters. */
+export async function cleanupDemos(db: Db, now = Date.now()): Promise<void> {
+  const cutoff = sqlTime(now - DEMO_HOURS * 3600e3);
+  const old = '(SELECT id FROM users WHERE is_demo = 1 AND created_at < ?)';
+  await db.batch([
+    [`DELETE FROM expenses WHERE user_id IN ${old}`, cutoff],
+    [`DELETE FROM budgets WHERE user_id IN ${old}`, cutoff],
+    [`DELETE FROM buckets WHERE user_id IN ${old}`, cutoff],
+    [`DELETE FROM sessions WHERE user_id IN ${old}`, cutoff],
+    [`DELETE FROM reset_tokens WHERE user_id IN ${old}`, cutoff],
+    ['DELETE FROM users WHERE is_demo = 1 AND created_at < ?', cutoff],
+    ["DELETE FROM login_attempts WHERE ip LIKE 'demo:%' AND at < ?", now - 864e5],
+  ]);
+}
+
 // ---------- backups ----------
-/** Full snapshot of everything needed to restore accounts (not sessions/attempts/tokens). */
+/** Full snapshot of everything needed to restore accounts (not sessions/attempts/tokens, not demo accounts). */
 export async function snapshot(db: Db): Promise<Snapshot> {
+  const real = 'user_id IN (SELECT id FROM users WHERE is_demo = 0)';
   const [users, buckets, expenses, budgets] = await Promise.all([
-    db.all<UserRow>('SELECT * FROM users ORDER BY id'),
-    db.all<BucketRow>('SELECT * FROM buckets ORDER BY id'),
-    db.all<ExpenseRow>('SELECT * FROM expenses ORDER BY id'),
-    db.all<BudgetRow>('SELECT * FROM budgets ORDER BY user_id, month'),
+    db.all<UserRow>('SELECT * FROM users WHERE is_demo = 0 ORDER BY id'),
+    db.all<BucketRow>(`SELECT * FROM buckets WHERE ${real} ORDER BY id`),
+    db.all<ExpenseRow>(`SELECT * FROM expenses WHERE ${real} ORDER BY id`),
+    db.all<BudgetRow>(`SELECT * FROM budgets WHERE ${real} ORDER BY user_id, month`),
   ]);
   return { version: 3, takenAt: new Date().toISOString(), users, buckets, expenses, budgets };
 }

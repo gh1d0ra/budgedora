@@ -122,6 +122,20 @@
     } finally { btn.disabled = false; }
   });
 
+  $('#demoBtn').addEventListener('click', async () => {
+    const btn = $('#demoBtn');
+    btn.disabled = true;
+    btn.textContent = 'Setting up the demo…';
+    try {
+      await api('POST', '/api/demo');
+      await load();
+      toast('Welcome to the demo — look around, change anything');
+    } catch (err) {
+      $('#authError').textContent = err.message;
+      $('#authError').hidden = false;
+    } finally { btn.disabled = false; btn.textContent = '👀 Try the demo'; }
+  });
+
   async function load() {
     if (resetToken()) return showAuth();
     try {
@@ -140,6 +154,7 @@
     $('#auth').hidden = true;
     $('#app').hidden = false;
     $('#userName').textContent = state.user.name;
+    $('#demoBanner').hidden = !state.user.isDemo;
     state.periodKey = store.get('periodKey') || 'this-month';
     if (!$('#date').value) setDate(S.ymd(new Date()));
     switchTab(location.hash.slice(1) || 'add', true);
@@ -1300,10 +1315,15 @@
       toast('Account saved');
     } catch (err) { toast(err.message); }
   });
-  $('#logoutBtn').addEventListener('click', async () => {
+  async function signOut() {
     await api('POST', '/api/logout');
     state.user = null; state.expenses = []; state.buckets = [];
     showAuth();
+  }
+  $('#logoutBtn').addEventListener('click', signOut);
+  $('#demoSignup').addEventListener('click', async () => {
+    await signOut();
+    $('[data-auth=signup]').click();
   });
 
   function parseCsv(text) {

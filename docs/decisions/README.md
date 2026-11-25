@@ -9,3 +9,6 @@ Short notes on the choices that shape Budgedora: the context, the decision, and 
 | [0003](0003-parse-statements-in-the-browser.md) | Parse bank statements in the browser |
 | [0004](0004-no-front-end-framework.md) | No front-end framework or build step |
 | [0005](0005-typescript-without-a-build.md) | TypeScript on the server without a compile step |
+| [0006](0006-public-demo-accounts.md) | A public demo: a private, throw-away account per visitor |
+| [0007](0007-openapi-contract.md) | The API contract lives in OpenAPI; types and tests are derived from it |
+| [0008](0008-gradual-releases.md) | Gradual releases with smoke tests, a canary and automatic rollback |

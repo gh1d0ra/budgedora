@@ -29,6 +29,10 @@
         <p class="forgot login-only"><button type="button" class="link" id="forgotBtn">Forgot password?</button></p>
         <p class="muted small" id="forgotInfo" hidden>Ask the family admin to create a password-reset link for you in Budgedora (Buckets → Family accounts). The link works once, for 24 hours.</p>
       </form>
+      <div class="demo-cta" id="demoCta">
+        <button type="button" class="btn block" id="demoBtn">👀 Try the demo</button>
+        <p class="muted small">Your own private copy with 3 years of made-up spending. Deleted after a day.</p>
+      </div>
 
       <form id="resetForm" hidden autocomplete="on">
         <h3>Choose a new password</h3>
@@ -55,6 +59,10 @@
       </nav>
       <div class="user" id="userName"></div>
     </header>
+    <div class="demo-banner" id="demoBanner" hidden>
+      You're in the demo: the data is made up and is deleted after a day.
+      <button type="button" class="link" id="demoSignup">Create your own account</button>
+    </div>
 
     <main>
       <!-- ADD -->

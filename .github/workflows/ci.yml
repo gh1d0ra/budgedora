@@ -8,7 +8,7 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }} # never cancel a release half-way
 
 permissions:
   contents: read
@@ -28,7 +28,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
-      - run: npm test
+      - run: npm test # includes the OpenAPI contract tests
+      - name: Generated API types match openapi.json
+        run: npm run api:check
 
   worker-build:
     name: Worker bundles
@@ -61,8 +63,55 @@ jobs:
           path: playwright-report/
           retention-days: 14
 
+  terraform:
+    name: Terraform (fmt + validate)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate
+
+  # Each pull request gets its own link on a separate Worker with its own database (never the real data).
+  preview:
+    name: Preview link
+    needs: [test, worker-build]
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Skip (no Cloudflare token configured)
+        if: env.CLOUDFLARE_API_TOKEN == ''
+        run: echo "::notice::Add the CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID secrets to get preview links."
+      - uses: actions/setup-node@v4
+        if: env.CLOUDFLARE_API_TOKEN != ''
+        with:
+          node-version: 24
+          cache: npm
+      - if: env.CLOUDFLARE_API_TOKEN != ''
+        run: npm ci
+      - name: Migrate the preview database
+        if: env.CLOUDFLARE_API_TOKEN != ''
+        run: npx wrangler@4 d1 migrations apply budgedora-preview --env preview --remote
+      - name: Upload preview
+        if: env.CLOUDFLARE_API_TOKEN != ''
+        run: |
+          out=$(npx wrangler@4 versions upload --env preview --preview-alias "pr-${{ github.event.pull_request.number }}" --message "PR #${{ github.event.pull_request.number }} ${GITHUB_SHA::7}")
+          echo "$out"
+          url=$(echo "$out" | grep -oE 'https://pr-[^ ]+workers\.dev' | head -1)
+          echo "### Preview: $url" >> "$GITHUB_STEP_SUMMARY"
+          echo "Separate Worker and database; use **Try the demo** to look around." >> "$GITHUB_STEP_SUMMARY"
+
+  # Gradual release: migrate, upload, smoke-test the new version, 10% canary, then 100% (or roll back).
   deploy:
-    name: Deploy to Cloudflare
+    name: Release to Cloudflare
     needs: [test, worker-build, e2e]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -70,22 +119,20 @@ jobs:
       name: production
       url: https://budgedora.igorrash.workers.dev
     env:
-      HAS_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
     steps:
       - uses: actions/checkout@v4
       - name: Skip (no Cloudflare token configured)
-        if: env.HAS_TOKEN != 'true'
-        run: echo "::notice::Add the CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID secrets to deploy automatically."
+        if: env.CLOUDFLARE_API_TOKEN == ''
+        run: echo "::notice::Add the CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID secrets to release automatically."
       - uses: actions/setup-node@v4
-        if: env.HAS_TOKEN == 'true'
+        if: env.CLOUDFLARE_API_TOKEN != ''
         with:
           node-version: 24
           cache: npm
-      - run: npm ci
-        if: env.HAS_TOKEN == 'true'
-      - uses: cloudflare/wrangler-action@v3
-        if: env.HAS_TOKEN == 'true'
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          wranglerVersion: '4'
+      - if: env.CLOUDFLARE_API_TOKEN != ''
+        run: npm ci
+      - name: Migrate, canary, promote (rolls back on failure)
+        if: env.CLOUDFLARE_API_TOKEN != ''
+        run: node scripts/release.ts  # message defaults to "CI <short sha>"

@@ -1,6 +1,8 @@
 name = "budgedora"
 main = "src/worker.ts"
 compatibility_date = "2025-09-01"
+# Per-PR preview links (pr-<n>-budgedora.<subdomain>.workers.dev) for versions uploaded with --preview-alias
+preview_urls = true
 
 # Static front-end. Every request runs the Worker first so security headers apply to pages too.
 [assets]
@@ -12,6 +14,8 @@ run_worker_first = true
 binding = "DB"
 database_name = "budgedora"
 database_id = "58f98c55-af37-406b-a804-8da0828e5cf4"
+# Applied by the release pipeline before each deploy: npx wrangler d1 migrations apply budgedora --remote
+migrations_dir = "src/migrations"
 
 # Daily snapshots (daily/… kept 35 days, monthly/… kept forever)
 [[kv_namespaces]]
@@ -28,3 +32,29 @@ crons = ["17 4 * * *"]
 
 [observability]
 enabled = true
+
+# Request metrics (route, status, latency, D1 queries/rows) for scripts/metrics.ts; created on first write
+[[analytics_engine_datasets]]
+binding = "METRICS"
+dataset = "budgedora_requests"
+
+# The running version id, reported by /api/health so release smoke tests can tell versions apart
+[version_metadata]
+binding = "CF_VERSION_METADATA"
+
+# Pull-request previews: a separate Worker with its own empty database, so a preview can never touch real data.
+# Created once (see docs/release.md); CI uploads each PR with: wrangler versions upload --env preview --preview-alias pr-<n>
+[env.preview]
+name = "budgedora-preview"
+preview_urls = true
+workers_dev = true
+triggers = { crons = [] }
+
+[[env.preview.d1_databases]]
+binding = "DB"
+database_name = "budgedora-preview"
+database_id = "143de2ae-4310-41a9-8db8-bccea7367cb4"
+migrations_dir = "src/migrations"
+
+[env.preview.version_metadata]
+binding = "CF_VERSION_METADATA"

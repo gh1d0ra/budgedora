@@ -1,0 +1,255 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Budgedora API",
+    "version": "1.4.0",
+    "description": "The JSON API behind Budgedora. The same code (src/api.ts) runs on Cloudflare Workers with D1 and on Node with SQLite. Types in src/api-types.ts are generated from this file (npm run api:types), and test/contract.test.ts checks every response against it.\n\nState-changing requests must send Content-Type: application/json (a CSRF guard). Amounts are in the account's currency units (e.g. dollars), with two decimals."
+  },
+  "servers": [{ "url": "https://budgedora.igorrash.workers.dev" }, { "url": "http://localhost:3000" }],
+  "components": {
+    "securitySchemes": {
+      "session": { "type": "apiKey", "in": "cookie", "name": "sid", "description": "Set by sign-up, sign-in, reset and demo. HttpOnly, SameSite=Lax." }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object", "required": ["error"], "additionalProperties": false,
+        "properties": { "error": { "type": "string" }, "lockedUntil": { "type": "integer", "description": "Epoch ms, on 423 Locked" } }
+      },
+      "Ok": { "type": "object", "required": ["ok"], "additionalProperties": false, "properties": { "ok": { "const": true } } },
+      "Health": {
+        "type": "object", "required": ["ok", "version"], "additionalProperties": false,
+        "properties": { "ok": { "const": true }, "version": { "type": "string", "description": "The Worker version id serving this request" } }
+      },
+      "Date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+      "Month": { "type": "string", "pattern": "^\\d{4}-(0[1-9]|1[0-2])$" },
+      "User": {
+        "type": "object", "required": ["id", "email", "name", "currency", "isAdmin", "isDemo"], "additionalProperties": false,
+        "properties": {
+          "id": { "type": "integer" }, "email": { "type": "string" }, "name": { "type": "string" },
+          "currency": { "type": "string", "pattern": "^[A-Z]{3}$" }, "isAdmin": { "type": "boolean" }, "isDemo": { "type": "boolean" }
+        }
+      },
+      "Bucket": {
+        "type": "object", "required": ["id", "name", "icon", "color", "sort", "archived", "monthlyBudget"], "additionalProperties": false,
+        "properties": {
+          "id": { "type": "integer" }, "name": { "type": "string" }, "icon": { "type": "string" },
+          "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" }, "sort": { "type": "integer" }, "archived": { "type": "boolean" },
+          "monthlyBudget": { "type": ["number", "null"], "description": "Default expected amount per month" }
+        }
+      },
+      "Expense": {
+        "type": "object", "required": ["id", "bucketId", "amount", "date", "note"], "additionalProperties": false,
+        "properties": {
+          "id": { "type": "integer" }, "bucketId": { "type": "integer" },
+          "amount": { "type": "number", "description": "Negative for refunds" }, "date": { "$ref": "#/components/schemas/Date" }, "note": { "type": "string" }
+        }
+      },
+      "Budget": {
+        "type": "object", "required": ["bucketId", "month", "amount"], "additionalProperties": false,
+        "properties": { "bucketId": { "type": "integer" }, "month": { "$ref": "#/components/schemas/Month" }, "amount": { "type": "number", "minimum": 0 } }
+      },
+      "Data": {
+        "type": "object", "required": ["user", "buckets", "expenses", "budgets"], "additionalProperties": false,
+        "properties": {
+          "user": { "$ref": "#/components/schemas/User" },
+          "buckets": { "type": "array", "items": { "$ref": "#/components/schemas/Bucket" } },
+          "expenses": { "type": "array", "items": { "$ref": "#/components/schemas/Expense" } },
+          "budgets": { "type": "array", "items": { "$ref": "#/components/schemas/Budget" } }
+        }
+      },
+      "AdminUser": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "email", "name", "createdAt", "deletedAt", "locked", "failedLogins", "expenses", "lastExpense", "isAdmin"],
+        "properties": {
+          "id": { "type": "integer" }, "email": { "type": "string" }, "name": { "type": "string" }, "createdAt": { "type": "string" },
+          "deletedAt": { "type": ["string", "null"] }, "locked": { "type": "boolean" }, "failedLogins": { "type": "integer" },
+          "expenses": { "type": "integer" }, "lastExpense": { "type": ["string", "null"] }, "isAdmin": { "type": "boolean" }
+        }
+      },
+      "BackupResult": {
+        "type": "object", "required": ["key", "users", "expenses", "bytes", "takenAt"], "additionalProperties": false,
+        "properties": { "key": { "type": "string" }, "users": { "type": "integer" }, "expenses": { "type": "integer" }, "bytes": { "type": "integer" }, "takenAt": { "type": "string" } }
+      },
+      "Credentials": {
+        "type": "object", "required": ["email", "password"],
+        "properties": { "email": { "type": "string" }, "password": { "type": "string" }, "name": { "type": "string" } }
+      },
+      "NewExpense": {
+        "type": "object", "required": ["amount", "date", "bucketId"],
+        "properties": { "amount": { "type": ["number", "string"] }, "date": { "$ref": "#/components/schemas/Date" }, "bucketId": { "type": "integer" }, "note": { "type": "string" } }
+      },
+      "ExpenseChanges": {
+        "type": "object",
+        "properties": { "amount": { "type": ["number", "string"] }, "date": { "$ref": "#/components/schemas/Date" }, "bucketId": { "type": "integer" }, "note": { "type": "string" } }
+      },
+      "BucketChanges": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" }, "icon": { "type": "string" }, "color": { "type": "string" },
+          "monthlyBudget": { "type": ["number", "string", "null"] }, "archived": { "type": "boolean" }
+        }
+      }
+    },
+    "responses": {
+      "Error": { "description": "Something was wrong with the request", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "Ok": { "description": "Done", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Ok" } } } },
+      "SignedIn": {
+        "description": "Signed in; the session cookie is set",
+        "headers": { "Set-Cookie": { "schema": { "type": "string" } } },
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Ok" } } }
+      }
+    },
+    "parameters": {
+      "id": { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+    }
+  },
+  "security": [{ "session": [] }],
+  "paths": {
+    "/api/health": {
+      "get": {
+        "operationId": "health", "summary": "Database reachable and schema up to date; reports the running version (used by the release smoke tests)", "security": [], "tags": ["Operations"],
+        "responses": { "200": { "description": "Healthy", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Health" } } } }, "500": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/api/signup": {
+      "post": {
+        "operationId": "signup", "summary": "Create an account (with the default buckets) and sign in", "security": [], "tags": ["Accounts"],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Credentials" } } } },
+        "responses": { "200": { "$ref": "#/components/responses/SignedIn" }, "400": { "$ref": "#/components/responses/Error" }, "409": { "$ref": "#/components/responses/Error" }, "429": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/api/login": {
+      "post": {
+        "operationId": "login", "summary": "Sign in. Five wrong passwords lock the account for 15 minutes, doubling after that", "security": [], "tags": ["Accounts"],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Credentials" } } } },
+        "responses": {
+          "200": { "$ref": "#/components/responses/SignedIn" }, "401": { "$ref": "#/components/responses/Error" }, "403": { "$ref": "#/components/responses/Error" },
+          "423": { "$ref": "#/components/responses/Error" }, "429": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/logout": {
+      "post": { "operationId": "logout", "summary": "End this session", "security": [], "tags": ["Accounts"], "responses": { "200": { "$ref": "#/components/responses/Ok" } } }
+    },
+    "/api/reset": {
+      "post": {
+        "operationId": "resetPassword", "summary": "Set a new password with a one-time reset link from the family admin", "security": [], "tags": ["Accounts"],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["token", "password"], "properties": { "token": { "type": "string" }, "password": { "type": "string" } } } } } },
+        "responses": {
+          "200": { "description": "Password changed and signed in", "content": { "application/json": { "schema": { "type": "object", "required": ["ok", "email"], "additionalProperties": false, "properties": { "ok": { "const": true }, "email": { "type": "string" } } } } } },
+          "400": { "$ref": "#/components/responses/Error" }, "429": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/demo": {
+      "post": {
+        "operationId": "startDemo", "summary": "Create a private demo account with ~3 years of made-up data and sign in for 24 hours", "security": [], "tags": ["Accounts"],
+        "responses": { "200": { "$ref": "#/components/responses/SignedIn" }, "429": { "$ref": "#/components/responses/Error" }, "503": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/api/me": {
+      "get": { "operationId": "me", "summary": "The signed-in user", "tags": ["Accounts"], "responses": { "200": { "description": "The user", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/User" } } } }, "401": { "$ref": "#/components/responses/Error" } } },
+      "put": {
+        "operationId": "updateMe", "summary": "Change name, currency or password (signs out other devices)", "tags": ["Accounts"],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "properties": { "name": { "type": "string" }, "currency": { "type": "string" }, "currentPassword": { "type": "string" }, "newPassword": { "type": "string" } } } } } },
+        "responses": { "200": { "description": "The updated user", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/User" } } } }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Error" }, "403": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/api/account/delete": {
+      "post": {
+        "operationId": "deleteAccount", "summary": "Soft-delete the account (the family admin can restore it)", "tags": ["Accounts"],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["confirm", "password"], "properties": { "confirm": { "const": "DELETE" }, "password": { "type": "string" } } } } } },
+        "responses": { "200": { "$ref": "#/components/responses/Ok" }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Error" }, "403": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/api/data": {
+      "get": { "operationId": "getData", "summary": "Everything the app needs: user, buckets, expenses and month plans", "tags": ["Data"], "responses": { "200": { "description": "All of the user's data", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Data" } } } }, "401": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/api/budgets": {
+      "put": {
+        "operationId": "setMonthPlan", "summary": "Set (or clear with null) the expected amount per bucket for one month", "tags": ["Data"],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["month", "items"], "properties": { "month": { "$ref": "#/components/schemas/Month" }, "items": { "type": "array", "items": { "type": "object", "required": ["bucketId"], "properties": { "bucketId": { "type": "integer" }, "amount": { "type": ["number", "string", "null"] } } } } } } } } },
+        "responses": { "200": { "description": "That month's plan", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Budget" } } } } }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/api/buckets": {
+      "post": {
+        "operationId": "createBucket", "summary": "Add a bucket", "tags": ["Buckets"],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BucketChanges" } } } },
+        "responses": { "200": { "description": "The new bucket", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Bucket" } } } }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/api/buckets/order": {
+      "put": {
+        "operationId": "orderBuckets", "summary": "Reorder buckets", "tags": ["Buckets"],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["ids"], "properties": { "ids": { "type": "array", "items": { "type": "integer" } } } } } } },
+        "responses": { "200": { "$ref": "#/components/responses/Ok" }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/api/buckets/{id}": {
+      "parameters": [{ "$ref": "#/components/parameters/id" }],
+      "put": {
+        "operationId": "updateBucket", "summary": "Rename, recolor, set the default budget, archive or restore", "tags": ["Buckets"],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BucketChanges" } } } },
+        "responses": { "200": { "description": "The bucket", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Bucket" } } } }, "401": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" } }
+      },
+      "delete": {
+        "operationId": "deleteBucket", "summary": "Delete a bucket, or archive it if it has expenses (history stays intact)", "tags": ["Buckets"],
+        "responses": {
+          "200": { "description": "Deleted or archived", "content": { "application/json": { "schema": { "oneOf": [
+            { "type": "object", "required": ["deleted"], "additionalProperties": false, "properties": { "deleted": { "const": true } } },
+            { "type": "object", "required": ["archived"], "additionalProperties": false, "properties": { "archived": { "const": true } } }
+          ] } } } },
+          "401": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/expenses": {
+      "post": {
+        "operationId": "createExpense", "summary": "Add an expense", "tags": ["Expenses"],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NewExpense" } } } },
+        "responses": { "200": { "description": "The new expense", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Expense" } } } }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/api/expenses/import": {
+      "post": {
+        "operationId": "importExpenses", "summary": "Add many expenses at once (statement or CSV import). Unknown bucket names become new buckets", "tags": ["Expenses"],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["rows"], "properties": { "rows": { "type": "array", "maxItems": 20000, "items": { "type": "object", "properties": { "date": { "type": "string" }, "bucket": { "type": "string" }, "amount": { "type": ["number", "string"] }, "note": { "type": "string" } } } } } } } } },
+        "responses": { "200": { "description": "How many were added and skipped", "content": { "application/json": { "schema": { "type": "object", "required": ["added", "skipped"], "additionalProperties": false, "properties": { "added": { "type": "integer" }, "skipped": { "type": "integer" } } } } } }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/api/expenses/{id}": {
+      "parameters": [{ "$ref": "#/components/parameters/id" }],
+      "put": {
+        "operationId": "updateExpense", "summary": "Change an expense", "tags": ["Expenses"],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ExpenseChanges" } } } },
+        "responses": { "200": { "description": "The expense", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Expense" } } } }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" } }
+      },
+      "delete": {
+        "operationId": "deleteExpense", "summary": "Delete an expense", "tags": ["Expenses"],
+        "responses": { "200": { "description": "Deleted", "content": { "application/json": { "schema": { "type": "object", "required": ["deleted"], "additionalProperties": false, "properties": { "deleted": { "const": true } } } } } }, "401": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" } }
+      }
+    },
+    "/api/export.csv": {
+      "get": { "operationId": "exportCsv", "summary": "All expenses as CSV: date,bucket,amount,note", "tags": ["Expenses"], "responses": { "200": { "description": "CSV file", "content": { "text/csv": { "schema": { "type": "string" } } } }, "401": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/api/admin/users": {
+      "get": { "operationId": "adminUsers", "summary": "Family admin: every account (not demo accounts)", "tags": ["Admin"], "responses": { "200": { "description": "Accounts", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/AdminUser" } } } } }, "401": { "$ref": "#/components/responses/Error" }, "403": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/api/admin/backup": {
+      "post": { "operationId": "adminBackup", "summary": "Family admin: take a backup now", "tags": ["Admin"], "responses": { "200": { "description": "Where it was stored", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BackupResult" } } } }, "401": { "$ref": "#/components/responses/Error" }, "403": { "$ref": "#/components/responses/Error" }, "501": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/api/admin/users/{id}/reset-link": {
+      "parameters": [{ "$ref": "#/components/parameters/id" }],
+      "post": { "operationId": "adminResetLink", "summary": "Family admin: a one-time password reset link, valid 24 hours", "tags": ["Admin"], "responses": { "200": { "description": "The link", "content": { "application/json": { "schema": { "type": "object", "required": ["link", "expiresInHours", "email"], "additionalProperties": false, "properties": { "link": { "type": "string" }, "expiresInHours": { "type": "integer" }, "email": { "type": "string" } } } } } }, "401": { "$ref": "#/components/responses/Error" }, "403": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/api/admin/users/{id}/restore": {
+      "parameters": [{ "$ref": "#/components/parameters/id" }],
+      "post": { "operationId": "adminRestore", "summary": "Family admin: restore a deleted account", "tags": ["Admin"], "responses": { "200": { "$ref": "#/components/responses/Ok" }, "401": { "$ref": "#/components/responses/Error" }, "403": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/api/admin/users/{id}/unlock": {
+      "parameters": [{ "$ref": "#/components/parameters/id" }],
+      "post": { "operationId": "adminUnlock", "summary": "Family admin: unlock an account after too many wrong passwords", "tags": ["Admin"], "responses": { "200": { "$ref": "#/components/responses/Ok" }, "401": { "$ref": "#/components/responses/Error" }, "403": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" } } }
+    }
+  }
+}

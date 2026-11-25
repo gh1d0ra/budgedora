@@ -4,7 +4,7 @@
 //   wrangler d1 execute budgedora --remote --file=<out.sql>
 import fs from 'node:fs';
 import { DEFAULT_BUCKETS, hashPassword } from '../src/api.ts';
-import { demoExpenses, DEMO_BUDGETS } from './demo-data.ts';
+import { demoExpenses, DEMO_BUDGETS } from '../src/demo.ts';
 
 const [email, password, name = 'Demo', out = 'demo.sql'] = process.argv.slice(2);
 if (!email || !password) {

@@ -5,7 +5,9 @@
 ![Cloudflare Workers](https://img.shields.io/badge/runs%20on-Cloudflare%20Workers%20%2B%20D1-f38020)
 
 A super simple, multi-account expense tracker. Type an amount, tap a bucket, done.
-**Live:** https://budgedora.igorrash.workers.dev
+
+**▶ Try it:** [budgedora.igorrash.workers.dev](https://budgedora.igorrash.workers.dev). Press **Try the demo** for your own private copy
+with 3 years of made-up spending (deleted after a day). API docs: [`openapi.json`](https://budgedora.igorrash.workers.dev/openapi.json).
 
 | Add | Import a statement | Ask a question | Reports |
 |---|---|---|---|
@@ -18,14 +20,19 @@ A super simple, multi-account expense tracker. Type an amount, tap a bucket, don
   built-in `node:sqlite` locally and in tests, through a four-method DB adapter.
 - **Private statement import:** bank PDFs, CSVs and Amazon order history are parsed **in the browser** (self-hosted pdf.js).
   Only the rows you approve reach the server.
+- **Public demo:** every visitor gets a private, throw-away account filled with made-up data in two SQL statements (`json_each`), rate-limited and cleaned up daily.
+- **API contract:** an OpenAPI 3.1 spec; TypeScript types are generated from it, and contract tests validate every response (Ajv).
+- **Gradual releases:** CI applies D1 migrations, smoke-tests the new version at its own URL, sends it 10% of traffic, then promotes it or rolls back automatically. Each PR gets a preview on a separate database.
+- **Observability:** per-request metrics in Workers Analytics Engine (latency, status, D1 queries and rows read, version), structured logs, `/api/health`, and targets checked by `scripts/metrics.ts`.
+- **Infrastructure as code:** Terraform for D1 and KV (existing resources imported); Wrangler for the code.
 - **Security:** PBKDF2 passwords, lockout and per-IP throttling, HttpOnly sessions, a JSON-only CSRF guard, and a strict CSP with no `eval`.
 - **Tested and shipped by CI:**
-  - 57 unit and API tests (`node:test`) and Playwright browser tests on desktop and phone sizes;
-  - GitHub Actions runs the type check, tests and a Worker build on every push, then deploys `main`.
+  - 66 unit, API, contract and demo tests (`node:test`) and Playwright browser tests on desktop and phone sizes, plus a k6 load test;
+  - GitHub Actions runs the type check, tests, spec check and a Worker build on every push, then releases `main` gradually.
 - **No front-end framework:** vanilla JS with no build step. Server-side TypeScript runs directly on Node 22.18+ by stripping the types.
 
-Read more: [architecture overview](docs/architecture.md) (diagrams, data model, request flow) and
-[design decisions](docs/decisions/).
+Read more: [architecture overview](docs/architecture.md) (diagrams, data model, request flow),
+[design decisions](docs/decisions/), [releases](docs/release.md), [observability](docs/observability.md) and the [threat model](docs/threat-model.md).
 
 Inspired by the best parts of YNAB / Goodbudget (envelope-style **buckets** with optional monthly budgets),
 Monarch / Copilot (clean reports, month-to-date pace) — minus the bank syncing and complexity.
@@ -121,8 +128,11 @@ npm run test:e2e       # browser tests: desktop + phone, against a throw-away lo
 |---|---|
 | `test/statements.test.ts` | AMEX / Chase / Wells Fargo CSV, OFX and PDF parsing, year rollover, totals check, skip rules, bucket guesses, duplicates, Amazon matching |
 | `test/smart.test.ts` | plain-English questions, periods, the amount calculator, suggestions, recurring charges |
+| `test/contract.test.ts` | every response validated against `public/openapi.json`; every documented operation exercised |
+| `test/demo.test.ts` | demo accounts: data, isolation, restrictions, per-IP limit, clean-up, excluded from backups and the admin list |
 | `test/api.test.ts` | sign-up and sessions, lockout and IP throttling, CSRF guard, isolation between accounts, CRUD, import and export, admin reset and restore, snapshots |
-| `e2e/app.spec.ts` | sign up → add an expense → import an AMEX statement → ask a question, in Chromium (desktop and Pixel 7) |
+| `e2e/app.spec.ts` | sign up → add an expense → import an AMEX statement → ask a question; try the demo; in Chromium (desktop and Pixel 7) |
+| `load/api.k6.js` | k6: 25 people signing in, loading their data and adding expenses at once (local server only) |
 
 All fixtures are made up; no real statements are stored in the repo.
 
@@ -131,8 +141,9 @@ All fixtures are made up; no real statements are stored in the repo.
 - a Worker bundle check;
 - the Playwright tests.
 
-On `main` it then deploys to Cloudflare with `wrangler`. That step needs the `CLOUDFLARE_API_TOKEN` and
-`CLOUDFLARE_ACCOUNT_ID` repository secrets, and is skipped with a notice until they're added.
+On `main` it then releases gradually (`scripts/release.ts`: migrate, smoke-test, 10% canary, promote or roll back), and
+pull requests get a preview link. Both need the `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` repository secrets and
+are skipped with a notice until they're added. See [docs/release.md](docs/release.md).
 
 Environment variables: `PORT` (default 3000), `DATA_DIR` (default `./data`, where `budgedora.db` lives).
 
@@ -156,12 +167,15 @@ node scripts/demo-sql.ts someone@example.com theirpassword "Name" demo.sql
 wrangler d1 execute budgedora --remote --file=demo.sql
 ```
 
-Upgrading an older database: run each new file in `src/migrations/` once with `wrangler d1 execute budgedora --remote --file=…`.
+Database changes: `npx wrangler d1 migrations apply budgedora --remote` (the release script does this). See [docs/release.md](docs/release.md).
 
 ## Structure
 
 ```
-src/api.ts           the JSON API (shared by Workers and Node) and its types
+src/api.ts           the JSON API (shared by Workers and Node)
+src/api-types.ts     types generated from public/openapi.json (npm run api:types)
+src/demo.ts          made-up data for the public demo and the seed scripts
+public/openapi.json  the API contract (OpenAPI 3.1)
 src/worker.ts        Cloudflare Worker entry (D1 + static assets)
 src/sqlite-db.ts     node:sqlite version of the DB adapter (local server + tests)
 src/schema.sql       database schema (fresh installs)
@@ -171,7 +185,10 @@ wrangler.toml        Cloudflare config
 tsconfig*.json       type checking (Node side, Worker side)
 test/                unit + API tests and made-up fixtures
 e2e/                 Playwright browser tests (playwright.config.ts)
-docs/                architecture, decision records, screenshots
+scripts/             release, metrics, D1 baseline, seeding and backup tools
+infra/               Terraform for D1 and KV
+load/                k6 load test
+docs/                architecture, decisions, release, observability, threat model, screenshots
 .github/             CI/CD workflow and Dependabot
 public/index.html    the single-page app
 public/app.js        UI (entry, history, reports, settings)

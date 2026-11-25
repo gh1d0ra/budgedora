@@ -2,7 +2,7 @@
 // Usage: npm run seed  [-- email password name]   (default demo@budgedora.test / demo1234)
 import { db } from '../server.ts';
 import { DEFAULT_BUCKETS, hashPassword } from '../src/api.ts';
-import { demoExpenses, DEMO_BUDGETS } from './demo-data.ts';
+import { demoExpenses, DEMO_BUDGETS } from '../src/demo.ts';
 
 const [email = 'demo@budgedora.test', password = 'demo1234', name = 'Demo'] = process.argv.slice(2);
 

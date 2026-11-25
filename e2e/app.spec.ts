@@ -57,3 +57,15 @@ test('wrong password shows an error and stays signed out', async ({ page }) => {
   await expect(page.locator('#authError')).toContainText('Wrong email or password');
   await expect(page.locator('#app')).toBeHidden();
 });
+
+test('try the demo: made-up data, a clear banner, and a way to sign up', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Try the demo' }).click();
+  await expect(page.locator('#app')).toBeVisible();
+  await expect(page.locator('#demoBanner')).toContainText('made up');
+  await page.locator('[data-tab=history]').click();
+  await expect(page.locator('#histList')).toContainText(/Costco|Walmart|Aldi|Kroger|Trader Joes/);
+  await page.locator('#demoSignup').click();
+  await expect(page.locator('#auth')).toBeVisible();
+  await expect(page.locator('#authSubmit')).toHaveText('Create account');
+});
