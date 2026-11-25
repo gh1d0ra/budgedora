@@ -73,8 +73,11 @@ try {
   for (let t = 0; t < watchSeconds; t += 20) {
     await sleep(dryRun ? 0 : 20000);
     await smoke(version);
-    const live = await fetch(`${BASE_URL}/api/health`); // whichever version the split picks
-    if (live.status !== 200) throw new Error(`the live site's /api/health answered ${live.status}`);
+    // The live site, whichever version the split picks: only checks both versions answer the same way
+    const page = await fetch(`${BASE_URL}/`);
+    if (page.status !== 200) throw new Error(`the live site's page answered ${page.status}`);
+    const me = await fetch(`${BASE_URL}/api/me`);
+    if (me.status !== 401) throw new Error(`the live site's /api/me (signed out) answered ${me.status}, expected 401`);
   }
 } catch (err) {
   log(`check failed: ${(err as Error).message}; rolling back to ${previous}`);
