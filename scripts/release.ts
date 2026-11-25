@@ -23,7 +23,10 @@ const log = (msg: string): void => console.log(`[release] ${msg}`);
 function wrangler(...a: string[]): string {
   log(`wrangler ${a.join(' ')}`);
   if (dryRun && !['deployments'].includes(a[0])) return '';
-  return execFileSync(process.platform === 'win32' ? 'npx.cmd' : 'npx', ['-y', 'wrangler@4', ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], shell: process.platform === 'win32' });
+  if (process.platform !== 'win32') return execFileSync('npx', ['-y', 'wrangler@4', ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
+  // Windows runs npx.cmd through the shell, so quote anything with spaces or shell characters
+  const quoted = a.map((s) => (/[\s()&|<>^"]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s));
+  return execFileSync('npx.cmd', ['-y', 'wrangler@4', ...quoted], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], shell: true });
 }
 
 /** Each version has its own preview URL (preview_urls = true), so it can be checked while it has 0% of traffic. */
